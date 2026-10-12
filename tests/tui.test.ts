@@ -12,7 +12,7 @@ import { packageName } from "../src/registration.ts";
 
 interface View {
   title: string;
-  options?: { title: string; value: string }[];
+  options?: { title: string; value: string; description?: string }[];
   onSelect?: (item: { title: string; value: string }) => void;
   onConfirm?: (text?: string) => void;
   message?: string;
@@ -21,6 +21,24 @@ interface View {
 test("TUI previews, saves JSONC, and applies rules through a matching server baseline", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "prompt-tui-"));
   t.after(() => rm(root, { recursive: true, force: true }));
+  const environment = {
+    XDG_CONFIG_HOME: join(root, "config"),
+    OPENCODE_TEST_HOME: join(root, "home"),
+    OPENCODE_CONFIG_DIR: join(root, "custom"),
+  };
+  const previous = Object.fromEntries(
+    Object.keys(environment).map((key) => [key, process.env[key]]),
+  );
+  Object.assign(process.env, environment);
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        Reflect.deleteProperty(process.env, key);
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
   const directory = join(root, "nested");
   await mkdir(directory);
   await mkdir(join(root, ".opencode"));
@@ -40,6 +58,7 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   let disposalCount = 0;
   let changeDuring: "baseline" | "refresh" | undefined;
   let reloadReads = 0;
+  let holdRead: Promise<void> | undefined;
   const commands = new Map<string, () => void>();
   const slashNames: string[] = [];
   let current: View | undefined;
@@ -82,6 +101,7 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
       },
       config: {
         async get() {
+          await holdRead;
           if (changeDuring === "baseline") {
             Object.assign(api.state.path, { directory: root });
           }
@@ -152,6 +172,113 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     assert.ok(item !== undefined);
     current?.onSelect?.(item);
   }
+  commands.get("prompt-composer.compose")!();
+  await view("Compose prompts");
+  choose("files");
+  assert.match((await view("Prompt files")).message ?? "", /No prompt files/);
+  api.ui.dialog.clear();
+  await view("Compose prompts");
+  const promptPath = join(root, ".opencode/prompts/review/findings.md");
+  await mkdir(join(root, ".opencode/prompts/review"), { recursive: true });
+  await writeFile(promptPath, "Findings");
+  const homePath = join(
+    environment.OPENCODE_TEST_HOME,
+    ".opencode/prompts/review/findings.md",
+  );
+  const customPath = join(
+    environment.OPENCODE_CONFIG_DIR,
+    "prompts/review/findings.md",
+  );
+  for (const path of [homePath, customPath]) {
+    await mkdir(join(path, ".."), { recursive: true });
+    await writeFile(path, "Override");
+  }
+  choose("files");
+  choose("files");
+  const fileList = await view("Prompt files");
+  assert.equal(
+    fileList.options?.some((item) => item.title === "review/findings.md"),
+    true,
+  );
+  for (const change of ["project", "connection"]) {
+    const client = api.client;
+    if (change === "project") {
+      Object.assign(api.state.path, { directory: root });
+    } else {
+      Reflect.set(api, "client", new Proxy(client, {}));
+    }
+    choose("review/findings.md");
+    assert.match(
+      (await view("Prompt Composer")).message ?? "",
+      /connection or project changed/,
+    );
+    Object.assign(api.state.path, { directory });
+    Reflect.set(api, "client", client);
+    api.ui.dialog.clear();
+    commands.get("prompt-composer.compose")!();
+    await view("Compose prompts");
+    choose("files");
+    await view("Prompt files");
+    alerts.length = 0;
+  }
+  choose("review/findings.md");
+  const detail = await view("Prompt file source");
+  assert.equal(
+    detail.message,
+    `Filename: review/findings.md\n\nInclude marker:\n{{include:review/findings.md}}\n\nWinning path:\n${customPath}\n\nShadowed paths (discovery order):\n${promptPath}\n${homePath}`,
+  );
+  api.ui.dialog.clear();
+  await view("Prompt files");
+  await rm(customPath);
+  choose("review/findings.md");
+  assert.match(
+    (await view("Prompt file source")).message ?? "",
+    /Winning path:/,
+  );
+  assert.equal(current?.message?.includes(`Winning path:\n${homePath}`), true);
+  assert.equal(
+    current.message.endsWith(`discovery order):\n${promptPath}`),
+    true,
+  );
+  api.ui.dialog.clear();
+  await view("Prompt files");
+  await rm(homePath);
+  await rm(promptPath);
+  choose("review/findings.md");
+  assert.match(
+    (await view("Prompt file source")).message ?? "",
+    /no longer discovered/i,
+  );
+  api.ui.dialog.clear();
+  await view("Prompt files");
+  choose("\u0000back");
+  await view("Compose prompts");
+  // Closing a pending scan must not resurrect the browser.
+  let releaseRead = () => {};
+  holdRead = new Promise<void>((resolve) => {
+    releaseRead = resolve;
+  });
+  choose("files");
+  await setTimeout(20);
+  api.ui.dialog.clear();
+  releaseRead();
+  await setTimeout(50);
+  assert.equal(current, undefined);
+  holdRead = undefined;
+  commands.get("prompt-composer.compose")!();
+  await view("Compose prompts");
+  // A connection/project change while loading must not show old inventory.
+  holdRead = new Promise<void>((resolve) => {
+    releaseRead = resolve;
+  });
+  choose("files");
+  await setTimeout(20);
+  Object.assign(api.state.path, { directory: root });
+  releaseRead();
+  await view("Prompt Composer");
+  Object.assign(api.state.path, { directory });
+  holdRead = undefined;
+  alerts.length = 0;
   commands.get("prompt-composer.compose")!();
   await view("Compose prompts");
   choose("edit");
@@ -243,6 +370,28 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   const stale = await view("Prompt Composer");
   assert.match(stale.message ?? "", /Prompt files changed/);
   assert.equal(config.agent!.review!.prompt, "Review\n\nAfter");
+  commands.get("prompt-composer.compose")!();
+  await view("Compose prompts");
+  choose("files");
+  assert.match(
+    (await view("Prompt Composer")).message ?? "",
+    /Prompt files changed/,
+  );
+  // Shared defaults must not hide the fixed project creation action.
+  const previousCustom = process.env.OPENCODE_CONFIG_DIR;
+  t.after(() => {
+    if (previousCustom === undefined) {
+      delete process.env.OPENCODE_CONFIG_DIR;
+    } else {
+      process.env.OPENCODE_CONFIG_DIR = previousCustom;
+    }
+  });
+  const shared = join(root, "shared");
+  await mkdir(shared);
+  const sharedPath = join(shared, "prompt-composer.jsonc");
+  const sharedText = '{"defaults":{"append":["Shared default"]}}';
+  await writeFile(sharedPath, sharedText);
+  process.env.OPENCODE_CONFIG_DIR = shared;
   const previousDisable = process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
   t.after(() => {
     if (previousDisable === undefined) {
@@ -292,6 +441,12 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     ),
     true,
   );
+  assert.equal(
+    (await view("Prompt settings source")).options?.find(
+      (option) => option.value === "create",
+    )?.description,
+    path,
+  );
   choose("create");
   queueMicrotask(() => Object.assign(api.state.path, { directory: root }));
   assert.match(
@@ -299,4 +454,40 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     /connection or project changed/,
   );
   await assert.rejects(readFile(path), { code: "ENOENT" });
+  Object.assign(api.state.path, { directory });
+  async function openSources() {
+    commands.get("prompt-composer.compose")!();
+    await view("Compose prompts");
+    choose("edit");
+    return view("Prompt settings source");
+  }
+  // Leaving the menu is side-effect free, including native Escape and Back.
+  await openSources();
+  choose("\u0000back");
+  await view("Compose prompts");
+  await assert.rejects(readFile(path), { code: "ENOENT" });
+  await openSources();
+  api.ui.dialog.clear();
+  await view("Compose prompts");
+  await assert.rejects(readFile(path), { code: "ENOENT" });
+  // A concurrent creator must retain its document byte for byte.
+  await openSources();
+  const concurrent = '{"agents":{"review":{"inheritDefaults":false}}}';
+  await writeFile(path, concurrent);
+  choose("create");
+  assert.match((await view("Prompt Composer")).message ?? "", /EEXIST/);
+  assert.equal(await readFile(path, "utf8"), concurrent);
+  await rm(path);
+  await openSources();
+  choose("create");
+  await view("Prompt settings applied");
+  assert.equal(await readFile(path, "utf8"), '{\n  "agents": {}\n}\n');
+  assert.equal(await readFile(sharedPath, "utf8"), sharedText);
+  assert.equal(config.agent!.review!.prompt, "Review\n\nShared default");
+  const existing = await openSources();
+  assert.equal(
+    existing.options?.some((option) => option.value === "create"),
+    false,
+  );
+  assert.ok(existing.options.some((option) => option.value === path));
 });
