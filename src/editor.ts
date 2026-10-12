@@ -121,6 +121,9 @@ export async function planEdits(
 }
 
 export async function savePlan(plan: EditPlan): Promise<void> {
+  for (const edit of plan.edits) {
+    parseSettings(edit.text);
+  }
   const held: { path: string; close: () => Promise<void> }[] = [];
   const staged: { edit: Edit; temporary: string; original: SourceFile }[] = [];
   const written: typeof staged = [];

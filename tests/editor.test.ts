@@ -82,3 +82,36 @@ test("a newly discovered prompt invalidates an outstanding preview", async (t) =
   await writeFile(join(f.root, ".opencode/prompts/new.md"), "New");
   await assert.rejects(savePlan(plan), /discovery changed/);
 });
+
+for (const [name, text, message] of [
+  [
+    "oversized UTF-8 text",
+    `/*${"é".repeat(512 * 1024)}*/\n{"defaults":{"append":["After"]}}`,
+    /size limit/,
+  ],
+  [
+    "NUL in a JSONC comment",
+    '/*\0*/\n{"defaults":{"append":["After"]}}',
+    /NUL/,
+  ],
+] as const) {
+  test(`rejects ${name} before preview or save without changing original bytes`, async (t) => {
+    const f = await fixture(t);
+    const original = await readFile(f.path);
+    await assert.rejects(
+      planEdits(f.settings, f.native, [{ path: f.path, text }]),
+      message,
+    );
+    await assert.rejects(
+      loadSettings(f.settings.context, new Map([[f.path, text]])),
+      message,
+    );
+    assert.deepEqual(await readFile(f.path), original);
+    const plan = await planEdits(f.settings, f.native, [
+      { path: f.path, text: "{}" },
+    ]);
+    plan.edits[0].text = text;
+    await assert.rejects(savePlan(plan), message);
+    assert.deepEqual(await readFile(f.path), original);
+  });
+}

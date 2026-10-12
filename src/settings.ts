@@ -59,7 +59,19 @@ function uniqueKeys(node: JsonNode | undefined): void {
   node?.children?.forEach(uniqueKeys);
 }
 
+const sourceByteLimit = 1024 * 1024;
+
+function validateSourceText(text: string, limit = sourceByteLimit): void {
+  if (Buffer.byteLength(text, "utf8") > limit) {
+    throw new SettingsError("A prompt source exceeds its size limit.");
+  }
+  if (text.includes("\0")) {
+    throw new SettingsError("Prompt sources cannot contain NUL bytes.");
+  }
+}
+
 export function parseSettings(text: string): PromptDocument {
+  validateSourceText(text);
   const errors: ParseError[] = [];
   const value: unknown = parse(text, errors, { allowTrailingComma: true });
   uniqueKeys(parseTree(text));
@@ -94,7 +106,7 @@ export function resolvePath(value: string, directory: string): string {
 
 export async function readSource(
   path: string,
-  limit = 1024 * 1024,
+  limit = sourceByteLimit,
 ): Promise<SourceFile> {
   try {
     const before = await lstat(path);
@@ -124,9 +136,7 @@ export async function readSource(
         throw new SettingsError("A prompt source exceeds its size limit.");
       }
       const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-      if (text.includes("\0")) {
-        throw new SettingsError("Prompt sources cannot contain NUL bytes.");
-      }
+      validateSourceText(text, limit);
       return { path, text, mode: current.mode & 0o777 };
     } finally {
       await file.close();
