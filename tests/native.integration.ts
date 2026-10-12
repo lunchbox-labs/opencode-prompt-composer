@@ -1,0 +1,367 @@
+import assert from "node:assert/strict";
+import { execFile, spawn } from "node:child_process";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { setTimeout } from "node:timers/promises";
+import { test } from "node:test";
+import { promisify } from "node:util";
+import { readState } from "../src/runtime-state.ts";
+
+const execute = promisify(execFile);
+const npm = process.env.npm_execpath;
+assert.ok(npm !== undefined, "Run native tests through npm");
+const version = "1.18.34";
+
+test(
+  "installed native hooks preserve authored files, reload, discover overrides and compose on-demand skills",
+  { timeout: 240_000 },
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "prompt-native-"));
+    t.after(() =>
+      rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      }),
+    );
+    const env: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (
+        [
+          "path",
+          "systemroot",
+          "windir",
+          "comspec",
+          "pathext",
+          "https_proxy",
+          "http_proxy",
+          "ssl_cert_file",
+          "node_extra_ca_certs",
+        ].includes(key.toLowerCase())
+      ) {
+        env[key] = value;
+      }
+    }
+    Object.assign(env, {
+      XDG_CONFIG_HOME: join(root, "config"),
+      XDG_DATA_HOME: join(root, "data"),
+      XDG_STATE_HOME: join(root, "state"),
+      XDG_CACHE_HOME: join(root, "cache"),
+      OPENCODE_TEST_HOME: root,
+      OPENCODE_DB: join(root, "db.sqlite"),
+      OPENCODE_DISABLE_AUTOUPDATE: "1",
+      OPENCODE_DISABLE_MODELS_FETCH: "1",
+      OPENCODE_DISABLE_DEFAULT_PLUGINS: "true",
+      OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: "true",
+      NO_PROXY: "localhost,127.0.0.1,::1",
+      no_proxy: "localhost,127.0.0.1,::1",
+    });
+    let binary = process.env.OPENCODE_BIN;
+    if (binary === undefined) {
+      const name =
+        process.platform === "win32"
+          ? "opencode-windows-x64"
+          : "opencode-linux-x64";
+      await execute(
+        process.execPath,
+        [
+          npm,
+          "install",
+          "--prefix",
+          join(root, "host"),
+          "--no-audit",
+          "--no-fund",
+          `${name}@${version}`,
+        ],
+        { timeout: 120_000 },
+      );
+      binary = join(
+        root,
+        "host/node_modules",
+        name,
+        "bin",
+        process.platform === "win32" ? "opencode.exe" : "opencode",
+      );
+    }
+    assert.equal(
+      (
+        await execute(binary, ["--version"], { env, timeout: 30_000 })
+      ).stdout.trim(),
+      version,
+    );
+    const packed = await execute(
+      process.execPath,
+      [npm, "pack", "--ignore-scripts", "--json", "--pack-destination", root],
+      { cwd: resolve(".") },
+    );
+    const [{ filename }] = JSON.parse(packed.stdout) as { filename: string }[];
+    const install = join(root, "installed");
+    await execute(
+      process.execPath,
+      [
+        npm,
+        "install",
+        "--prefix",
+        install,
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        join(root, filename),
+      ],
+      { timeout: 120_000 },
+    );
+    const plugin = join(
+      install,
+      "node_modules/@lunchbox-labs/opencode-prompt-composer",
+    );
+    const project = join(root, "project");
+    const shared = join(root, "config/opencode");
+    for (const path of [
+      join(project, ".opencode/prompts/review"),
+      join(project, ".opencode/agents"),
+      join(project, ".opencode/commands"),
+      join(project, ".opencode/skills/evidence"),
+      join(shared, "prompts/review"),
+    ]) {
+      await mkdir(path, { recursive: true });
+    }
+    await writeFile(join(shared, "prompts/review/body.md"), "Shared");
+    await writeFile(
+      join(project, ".opencode/prompts/review/body.md"),
+      "Project {{include:review/nested.txt}}",
+    );
+    await writeFile(
+      join(project, ".opencode/prompts/review/nested.txt"),
+      "evidence",
+    );
+    const agentPath = join(project, ".opencode/agents/review.md");
+    const agentText =
+      "---\ndescription: Review changes\nmode: primary\n---\nReview {{include:review/body.md}}";
+    await writeFile(agentPath, agentText);
+    await writeFile(
+      join(project, ".opencode/commands/check.md"),
+      "---\ndescription: Native command\nagent: review\nsubtask: true\n---\nCheck {{include:review/body.md}} $ARGUMENTS \\{{include:literal.md}}",
+    );
+    await writeFile(
+      join(project, ".opencode/skills/evidence/SKILL.md"),
+      "---\nname: evidence\ndescription: Evidence checklist\n---\nSkill {{include:review/body.md}}",
+    );
+    const settingsPath = join(project, ".opencode/prompt-composer.jsonc");
+    const settingsText = JSON.stringify({
+      defaults: { append: ["State uncertainty."] },
+      agents: { review: { prepend: ["Use evidence."] } },
+    });
+    await writeFile(settingsPath, settingsText);
+    const received: string[] = [];
+    const modelServer = createServer((request, response) => {
+      let text = "";
+      request.on("data", (chunk: Buffer) => {
+        text += chunk.toString();
+      });
+      request.on("end", () => {
+        received.push(text);
+        const toolReturned = text.includes('"role":"tool"');
+        const base = {
+          id: "fixture",
+          model: "fixture",
+          created: 1,
+          object: "chat.completion.chunk",
+        };
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        const delta = toolReturned
+          ? { role: "assistant", content: "Verified." }
+          : {
+              role: "assistant",
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "skill-call",
+                  type: "function",
+                  function: { name: "skill", arguments: '{"name":"evidence"}' },
+                },
+              ],
+            };
+        response.write(
+          `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`,
+        );
+        response.end(
+          `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: toolReturned ? "stop" : "tool_calls" }] })}\n\ndata: [DONE]\n\n`,
+        );
+      });
+    });
+    modelServer.listen(0, "127.0.0.1");
+    await once(modelServer, "listening");
+    t.after(() => {
+      modelServer.closeAllConnections();
+      modelServer.close();
+    });
+    const address = modelServer.address();
+    assert.ok(address !== null && typeof address !== "string");
+    const configPlugin = process.env.CONFIG_COMPOSER_DIR;
+    const plugins =
+      configPlugin === undefined
+        ? [plugin]
+        : process.env.CONFIG_COMPOSER_ORDER === "prompt-first"
+          ? [plugin, configPlugin]
+          : [configPlugin, plugin];
+    await writeFile(
+      join(shared, "opencode.jsonc"),
+      JSON.stringify({
+        plugin: plugins,
+        model: "fixture/model",
+        default_agent: "review",
+        provider: {
+          fixture: {
+            npm: "@ai-sdk/openai-compatible",
+            name: "Fixture",
+            options: {
+              baseURL: `http://127.0.0.1:${address.port}/v1`,
+              apiKey: "test-only",
+            },
+            models: {
+              model: {
+                name: "Fixture",
+                limit: { context: 32000, output: 1024 },
+              },
+            },
+          },
+        },
+        permission: { skill: "allow" },
+      }),
+    );
+    if (configPlugin !== undefined) {
+      await writeFile(
+        join(project, ".opencode/config-composer.jsonc"),
+        JSON.stringify({
+          componentGroups: { review: { agents: ["review"] } },
+          profiles: { work: { layers: [{ componentGroup: "review" }] } },
+          activeProfiles: ["work"],
+          defaults: {
+            agents: {
+              model: "fixture/model",
+              parameters: { temperature: 0.4 },
+            },
+          },
+        }),
+      );
+    }
+    const child = spawn(
+      binary,
+      ["serve", "--hostname", "127.0.0.1", "--port", "0", "--print-logs"],
+      {
+        cwd: project,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: process.platform !== "win32",
+      },
+    );
+    let output = "";
+    let logs = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      logs += chunk.toString();
+    });
+    t.after(async () => {
+      if (child.pid !== undefined && child.exitCode === null) {
+        if (process.platform === "win32") {
+          await execute("taskkill", [
+            "/pid",
+            String(child.pid),
+            "/T",
+            "/F",
+          ]).catch(() => undefined);
+        } else {
+          try {
+            process.kill(-child.pid, "SIGTERM");
+          } catch {
+            /* Already stopped. */
+          }
+        }
+        await Promise.race([once(child, "exit"), setTimeout(5000)]);
+      }
+    });
+    let url: string | undefined;
+    for (let n = 0; n < 600; n++) {
+      url = /https?:\/\/127\.0\.0\.1:\d+/.exec(output)?.[0];
+      if (url !== undefined) {
+        break;
+      }
+      if (child.exitCode !== null) {
+        throw new Error(`OpenCode exited: ${logs}`);
+      }
+      await setTimeout(100);
+    }
+    assert.ok(url !== undefined, `OpenCode did not start: ${logs}`);
+    async function api(path: string, body?: unknown): Promise<unknown> {
+      const response = await fetch(`${url}${path}`, {
+        method: body === undefined ? "GET" : "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-opencode-directory": project,
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(60_000),
+      });
+      assert.ok(
+        response.ok,
+        `${path}: ${await response.clone().text()}\n${logs}`,
+      );
+      return response.json();
+    }
+    const config = (await api("/config")) as {
+      agent: Record<string, { prompt: string; model?: string }>;
+      command: Record<string, { template: string; subtask: boolean }>;
+    };
+    assert.equal(
+      config.agent.review.prompt,
+      "Use evidence.\n\nReview Project evidence\n\nState uncertainty.",
+      logs,
+    );
+    assert.equal(
+      config.command.check.template,
+      "Check Project evidence $ARGUMENTS {{include:literal.md}}",
+    );
+    assert.equal(config.command.check.subtask, true);
+    const baseline = readState(config, project);
+    assert.match(
+      baseline.native.agent?.review?.prompt ?? "",
+      /include:review\/body.md/,
+    );
+    if (configPlugin !== undefined) {
+      assert.equal(config.agent.review.model, "fixture/model", logs);
+    }
+    const session = (await api("/session", {})) as { id: string };
+    const message = await api(`/session/${session.id}/message`, {
+      agent: "review",
+      model: { providerID: "fixture", modelID: "model" },
+      parts: [{ type: "text", text: "Load evidence now." }],
+    });
+    assert.match(JSON.stringify(message), /Verified/);
+    assert.ok(
+      received.some((body) => body.includes("Skill Project evidence")),
+      logs,
+    );
+    await writeFile(
+      join(project, ".opencode/prompts/review/nested.txt"),
+      "updated",
+    );
+    await api("/instance/dispose", {});
+    const reloaded = (await api("/config")) as typeof config;
+    assert.equal(
+      reloaded.agent.review.prompt,
+      "Use evidence.\n\nReview Project updated\n\nState uncertainty.",
+    );
+    assert.equal(
+      reloaded.command.check.template,
+      "Check Project updated $ARGUMENTS {{include:literal.md}}",
+    );
+    assert.equal(await readFile(agentPath, "utf8"), agentText);
+    assert.equal(await readFile(settingsPath, "utf8"), settingsText);
+  },
+);

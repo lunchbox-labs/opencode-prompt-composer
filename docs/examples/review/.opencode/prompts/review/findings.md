@@ -1,0 +1,1 @@
+For each finding, identify the affected file, explain the observable failure and propose a focused correction. Include evidence and a reproduction when practical. If no actionable findings remain, say so.

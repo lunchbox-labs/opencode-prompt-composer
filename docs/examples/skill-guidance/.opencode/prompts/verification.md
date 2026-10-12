@@ -1,0 +1,1 @@
+Run the focused checks for the behavior changed. Inspect their exit status and output. Explain what passed, what remains unverified, and any failures that affect the conclusion. Never infer success from a command merely starting.
