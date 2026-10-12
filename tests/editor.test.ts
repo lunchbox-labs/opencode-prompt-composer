@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -68,6 +76,27 @@ test("changed include dependencies invalidate saves and leave authored settings 
   await assert.rejects(savePlan(plan), /changed|stale/);
   assert.equal(await readFile(f.path, "utf8"), original);
 });
+
+test(
+  "saving preserves existing POSIX permissions under a restrictive umask",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const f = await fixture(t);
+    await chmod(f.path, 0o660);
+    f.settings = await loadSettings(f.settings.context);
+    const plan = await planEdits(f.settings, f.native, [
+      { path: f.path, text: "{}" },
+    ]);
+    const previous = process.umask(0o077);
+    try {
+      await savePlan(plan);
+    } finally {
+      process.umask(previous);
+    }
+    assert.equal(await readFile(f.path, "utf8"), "{}");
+    assert.equal((await stat(f.path)).mode & 0o777, 0o660);
+  },
+);
 
 test("a newly discovered prompt invalidates an outstanding preview", async (t) => {
   const f = await fixture(t);
