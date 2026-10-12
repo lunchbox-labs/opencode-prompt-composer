@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { watch } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -106,6 +107,8 @@ async function harness(t: TestContext, native: Config) {
   }
   return {
     api,
+    config,
+    root,
     fragment,
     controller,
     view,
@@ -336,6 +339,149 @@ test("page boundaries retain empty text, long lines, CRLF and trailing newlines"
       assert.ok(Array.from(page).length <= 240);
       assert.ok(page.split("\n").length <= 7);
       assert.equal(page.isWellFormed(), true);
+    }
+  }
+});
+
+test("saved preview composes changed settings and snippets without applying or writing", async (t) => {
+  const h = await harness(t, {
+    agent: { review: { prompt: "{{include:end.md}}" } },
+    command: { check: { template: "{{include:end.md}} $ARGUMENTS" } },
+  });
+  const running = structuredClone(h.config);
+  await writeFile(h.fragment, "Saved checklist.");
+  const settings = join(h.root, ".opencode/prompt-composer.jsonc");
+  const text =
+    '{"agents":{"review":{"append":["Saved rule."]},"missing":{"append":["Notice"]}}}';
+  await writeFile(settings, text);
+  const writes: string[] = [];
+  const watcher = watch(h.root, (_event, filename) =>
+    writes.push(String(filename)),
+  );
+  t.after(() => watcher.close());
+  await h.open();
+  h.choose("saved-preview");
+  h.choose("saved-preview");
+  await h.view("Saved prompt changes — not applied");
+  for (const [value, title, expected] of [
+    ["agent:review", "Agent: review", "Saved checklist.\n\nSaved rule."],
+    ["command:check", "Command: check", "Saved checklist. $ARGUMENTS"],
+  ]) {
+    h.choose(value);
+    await h.view(`${title} — not applied — pages`);
+    h.choose("0");
+    assert.equal(
+      (await h.view(`${title} — not applied — page 1/1`)).message,
+      expected,
+    );
+    await h.escape();
+    await h.view(`${title} — not applied — pages`);
+    h.choose("\u0000back");
+    await h.view("Saved prompt changes — not applied");
+  }
+  h.choose("notices");
+  await h.view("Composition notices — not applied — pages");
+  h.choose("0");
+  assert.match(
+    (await h.view("Composition notices — not applied — page 1/1")).message!,
+    /missing/,
+  );
+  assert.deepEqual(h.config, running);
+  assert.equal(await readFile(settings, "utf8"), text);
+  assert.equal(await readFile(h.fragment, "utf8"), "Saved checklist.");
+  assert.deepEqual(writes, []);
+  watcher.close();
+  await h.open();
+  h.choose("edit");
+  assert.match(
+    (await h.view("Prompt Composer")).message!,
+    /Prompt files changed/,
+  );
+});
+
+test("saved preview cancellation suppresses late success and errors", async (t) => {
+  for (const fail of [false, true]) {
+    const h = await harness(t, {});
+    let finish = () => {};
+    let started = () => {};
+    const reading = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    h.beforeRead = () => {
+      started();
+      return new Promise<void>((resolve, reject) => {
+        finish = () => (fail ? reject(new Error("Disconnected")) : resolve());
+      });
+    };
+    await h.open();
+    h.choose("saved-preview");
+    await reading;
+    await h.escape();
+    h.beforeRead = async () => {};
+    finish();
+    await setTimeout(30);
+    assert.equal(h.current, undefined);
+  }
+});
+
+test("saved preview refuses mismatched server source text", async (t) => {
+  const h = await harness(t, {
+    command: { check: { template: "{{include:end.md}}" } },
+  });
+  Object.assign(h.api.client.file, {
+    read: async () => ({ data: { type: "text", content: "Other server" } }),
+  });
+  await h.open();
+  h.choose("saved-preview");
+  assert.match(
+    (await h.view("Prompt Composer")).message!,
+    /do not match this OpenCode server/,
+  );
+});
+
+test("saved preview rejects malformed inputs, raced reads, inventory and baseline changes", async (t) => {
+  for (const failure of [
+    "malformed",
+    "read",
+    "inventory",
+    "baseline",
+    "connection",
+  ] as const) {
+    const h = await harness(t, {
+      command: { check: { template: "{{include:end.md}}" } },
+    });
+    const running = structuredClone(h.config);
+    if (failure === "malformed") {
+      await writeFile(join(h.root, ".opencode/prompt-composer.jsonc"), "{");
+    } else {
+      let reads = 0;
+      h.beforeRead = async () => {
+        if (++reads !== 2) {
+          return;
+        }
+        if (failure === "read") {
+          await writeFile(h.fragment, "Raced");
+        }
+        if (failure === "inventory") {
+          await writeFile(join(h.root, ".opencode/prompts/new.md"), "New");
+        }
+        if (failure === "baseline") {
+          h.config.command!.check.template = "Changed native state";
+        }
+        if (failure === "connection") {
+          Object.assign(h.api.state.path, { directory: `${h.root}/other` });
+        }
+      };
+    }
+    await h.open();
+    h.choose("saved-preview");
+    const error = await h.view("Prompt Composer");
+    assert.match(
+      error.message!,
+      /Invalid prompt settings|input changed|discovery changed|Native prompt state changed|connection or project changed/,
+    );
+    if (failure !== "baseline") {
+      assert.deepEqual(h.config, running);
     }
   }
 });
