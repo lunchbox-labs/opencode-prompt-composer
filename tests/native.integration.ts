@@ -409,7 +409,13 @@ test(
       );
       await exerciseConfigEditor(configPlugin, shared, api);
     }
-    await exercisePromptEditor(plugin, api, settingsPath);
+    await exercisePromptEditor(plugin, api, settingsPath).catch(
+      (error: unknown) => {
+        throw new Error(`Native prompt editor failed.\n${logs}`, {
+          cause: error,
+        });
+      },
+    );
     await writeFile(settingsPath, settingsText);
     await api("/instance/dispose", {});
     const session = (await api("/session", {})) as { id: string };
@@ -458,7 +464,13 @@ test(
         "Help {{include:review/body.md}}",
       );
       await exerciseConfigEditor(configPlugin, shared, api);
-      await exercisePromptEditor(plugin, api, settingsPath);
+      await exercisePromptEditor(plugin, api, settingsPath).catch(
+        (error: unknown) => {
+          throw new Error(`Native prompt editor failed.\n${logs}`, {
+            cause: error,
+          });
+        },
+      );
       await writeFile(settingsPath, settingsText);
 
       // Command-only downstream composition must also allow Config Composer's editor.

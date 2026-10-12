@@ -100,7 +100,11 @@ export async function exercisePromptEditor(
     ) {
       await setTimeout(10);
     }
-    assert.equal(current?.title, title, current?.message);
+    assert.equal(
+      current?.title,
+      title,
+      `${current?.message ?? ""}\nHost path: ${JSON.stringify(path)}\nRuntime: ${current?.title === "Prompt Composer" ? JSON.stringify(await request("/config")) : ""}`,
+    );
     return current;
   }
   function choose(value: string) {
