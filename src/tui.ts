@@ -153,10 +153,12 @@ const PromptComposerTui: TuiPlugin = (api) => {
               ".opencode/prompt-composer.jsonc",
             );
             await mkdir(dirname(path), { recursive: true });
+            assertCurrent(snapshot);
             await writeFile(path, '{\n  "agents": {}\n}\n', {
               flag: "wx",
               mode: 0o600,
             });
+            assertCurrent(snapshot);
             await apply();
           });
           return;

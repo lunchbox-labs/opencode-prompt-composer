@@ -290,4 +290,11 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     ),
     true,
   );
+  choose("create");
+  queueMicrotask(() => Object.assign(api.state.path, { directory: root }));
+  assert.match(
+    (await view("Prompt Composer")).message ?? "",
+    /connection or project changed/,
+  );
+  await assert.rejects(readFile(path), { code: "ENOENT" });
 });
