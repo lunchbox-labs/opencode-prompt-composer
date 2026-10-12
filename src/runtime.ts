@@ -1,6 +1,6 @@
 import type { Config } from "@opencode-ai/plugin";
 import { type PromptDependency, expandIncludes } from "./includes.ts";
-import type { LoadedSettings, SourceFile } from "./settings.ts";
+import type { LoadedSettings, Operations, SourceFile } from "./settings.ts";
 import { SettingsError, diagnosticName } from "./errors.ts";
 
 export interface Diagnostic {
@@ -38,6 +38,7 @@ export async function compose(
       overlays,
       consumer,
     );
+  const meaningful = new Set<Operations>();
   const policies = [
     { name: undefined, policy: settings.effective.defaults ?? {} },
     ...Object.entries(settings.effective.agents ?? {}).map(
@@ -60,14 +61,20 @@ export async function compose(
           ? "/defaults"
           : `/agents/${name.replaceAll("~", "~0").replaceAll("/", "~1")}`;
       for (const [index, text] of (policy[operation] ?? []).entries()) {
-        await expand(
+        const expanded = await expand(
           text,
           `settings${owner === undefined ? "" : ` ${diagnosticName(owner.path)}`} ${diagnosticName(`${pointer}/${operation}/${index}`)}`,
         );
+        if (expanded.trim() !== "") {
+          meaningful.add(policy);
+        }
       }
     }
   }
-  for (const name of Object.keys(settings.effective.agents ?? {})) {
+  for (const [name, policy] of Object.entries(
+    settings.effective.agents ?? {},
+  )) {
+    const agent = config.agent?.[name];
     if (
       !Object.hasOwn(config.agent ?? {}, name) ||
       config.agent?.[name]?.disable === true
@@ -76,6 +83,18 @@ export async function compose(
         kind: "agent",
         name,
         message: `Agent ${name} is missing or disabled; its prompt operations were skipped.`,
+      });
+    } else if (
+      agent !== undefined &&
+      (typeof agent.prompt !== "string" || agent.prompt.trim() === "") &&
+      (meaningful.has(policy) ||
+        (policy.inheritDefaults !== false &&
+          meaningful.has(settings.effective.defaults ?? {})))
+    ) {
+      diagnostics.push({
+        kind: "agent",
+        name,
+        message: `Agent ${name} has no authored prompt; its prompt additions were skipped to preserve OpenCode's native fallback.`,
       });
     }
   }

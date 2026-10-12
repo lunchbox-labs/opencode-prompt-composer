@@ -44,6 +44,7 @@ test("native bodies compose defaults and agent fragments without modifying nativ
   assert.equal(result.config.agent.build?.prompt, undefined);
   assert.equal(result.config.agent.review.temperature, 0.2);
   assert.deepEqual(native, before);
+  assert.deepEqual(result.diagnostics, []);
 });
 
 test("missing agents are diagnostic while unsafe inactive fragments remain fatal (#78)", async (t) => {
@@ -55,6 +56,121 @@ test("missing agents are diagnostic while unsafe inactive fragments remain fatal
   assert.equal(result.diagnostics[0].kind, "agent");
   settings.effective.agents!.absent.append = ["{{include:../secret.md}}"];
   await assert.rejects(compose({ agent: {} }, settings), /safe relative/);
+});
+
+test("named rules report skipped meaningful additions while preserving native fallback", async (t) => {
+  for (const prompt of [undefined, "", " \n\t"]) {
+    const { context } = await fixture(t, {
+      defaults: { prepend: ["Default guidance"] },
+      agents: {
+        build: { append: ["Build guidance"] },
+        plan: {},
+        review: { inheritDefaults: false, prepend: ["Review guidance"] },
+      },
+    });
+    const native: Config = {
+      agent: {
+        build: {
+          ...(prompt === undefined ? {} : { prompt }),
+          temperature: 0.2,
+        },
+        plan: { prompt },
+        review: { prompt, description: "Reviewer" },
+        unnamed: { prompt },
+      },
+      command: { check: { template: "Check", agent: "build" } },
+    };
+    const before = structuredClone(native);
+    const result = await compose(native, await loadSettings(context));
+    assert.deepEqual(result.config, before);
+    assert.deepEqual(native, before);
+    assert.deepEqual(
+      result.diagnostics.map((item) => item.name),
+      ["build", "plan", "review"],
+    );
+    for (const notice of result.diagnostics) {
+      assert.equal(notice.kind, "agent");
+      assert.match(notice.message, /skipped.*native fallback/i);
+    }
+  }
+});
+
+test("empty effective additions and defaults opt-out do not produce fallback notices", async (t) => {
+  const { root, context } = await fixture(t, {
+    agents: {
+      absent: {},
+      empty: { prepend: [], append: ["", " \n\t"] },
+      included: { append: ["{{include:empty.md}}"] },
+      optedOut: { inheritDefaults: false },
+    },
+  });
+  await writeFile(join(root, ".opencode/prompts/empty.md"), " \n");
+  const settings = await loadSettings(context);
+  const native: Config = {
+    agent: { absent: {}, empty: {}, included: {}, optedOut: {} },
+  };
+  assert.deepEqual((await compose(native, settings)).diagnostics, []);
+  settings.effective.defaults = { append: ["Default guidance"] };
+  assert.deepEqual(
+    (
+      await compose(
+        { agent: { optedOut: {}, unnamed: {} } },
+        {
+          ...settings,
+          effective: {
+            defaults: settings.effective.defaults,
+            agents: {
+              optedOut: {
+                inheritDefaults: false,
+                append: ["{{include:empty.md}}"],
+              },
+            },
+          },
+        },
+      )
+    ).diagnostics,
+    [],
+  );
+  const result = await compose(
+    native,
+    await loadSettings(context),
+    new Map([[join(root, ".opencode/prompts/empty.md"), "Preview guidance"]]),
+  );
+  assert.deepEqual(
+    result.diagnostics.map((item) => item.name),
+    ["included"],
+  );
+});
+
+test("missing and disabled notices remain distinct and skipped unsafe fragments stay fatal", async (t) => {
+  const { context } = await fixture(t, {
+    agents: {
+      missing: {},
+      disabled: { append: ["Advice"] },
+      build: { inheritDefaults: false },
+    },
+  });
+  const native: Config = { agent: { disabled: { disable: true }, build: {} } };
+  const settings = await loadSettings(context);
+  const result = await compose(native, settings);
+  assert.deepEqual(
+    result.diagnostics,
+    ["missing", "disabled"].map((name) => ({
+      kind: "agent",
+      name,
+      message: `Agent ${name} is missing or disabled; its prompt operations were skipped.`,
+    })),
+  );
+  for (const name of ["missing", "disabled", "build"]) {
+    const unsafe = structuredClone(settings.effective);
+    unsafe.agents![name].append = ["Advice", "{{include:../secret.md}}"];
+    await assert.rejects(
+      compose(native, { ...settings, effective: unsafe }),
+      /safe relative/,
+    );
+  }
+  settings.effective.defaults = { append: ["{{include:../secret.md}}"] };
+  await assert.rejects(compose(native, settings), /safe relative/);
 });
 
 test("config hook reloads native commands and agents without duplicate expansion or metadata loss", async (t) => {
