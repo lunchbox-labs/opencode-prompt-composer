@@ -1,0 +1,88 @@
+{
+  "name": "@lunchbox-labs/opencode-prompt-composer",
+  "version": "0.0.1",
+  "description": "Compose reusable prompt text in native OpenCode agents, commands and on-demand skills",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lunchbox-labs/opencode-prompt-composer.git"
+  },
+  "engines": {
+    "node": ">=22.18.0",
+    "opencode": "1.18.34"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    },
+    "./includes": {
+      "types": "./dist/includes.d.ts",
+      "default": "./dist/includes.js"
+    },
+    "./schema.json": "./schema.json",
+    "./tui": {
+      "types": "./dist/tui.d.ts",
+      "default": "./dist/tui.js"
+    },
+    "./editor": {
+      "types": "./dist/editor.d.ts",
+      "default": "./dist/editor.js"
+    }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "schema.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --experimental-strip-types --test tests/*.test.ts tests/*.test.mjs",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write src tests scripts package.json tsconfig*.json *.config.mjs schema.json",
+    "format:check": "prettier --check src tests scripts package.json tsconfig*.json *.config.mjs schema.json",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
+    "prepack": "npm run build",
+    "test:package": "npm run build && node --experimental-strip-types --test tests/package.integration.ts",
+    "test:native": "npm run build && node --experimental-strip-types --test tests/native.integration.ts"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "jsonc-parser": "3.3.1"
+  },
+  "devDependencies": {
+    "@eslint-community/eslint-plugin-eslint-comments": "4.8.1",
+    "@eslint/js": "10.0.1",
+    "@opencode-ai/plugin": "1.18.34",
+    "@opencode-ai/sdk": "1.18.34",
+    "@types/node": "24.19.1",
+    "eslint": "10.11.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-regexp": "3.3.1",
+    "globals": "17.13.0",
+    "prettier": "3.9.9",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.0",
+    "@opentui/core": "0.4.5",
+    "@opentui/keymap": "0.4.5",
+    "@opentui/solid": "0.4.5",
+    "solid-js": "1.9.12"
+  },
+  "overrides": {
+    "@opentui/solid": {
+      "@babel/core": "7.29.7"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  }
+}

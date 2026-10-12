@@ -1,0 +1,9 @@
+{
+  "defaults": { "append": ["Distinguish observed behavior from assumptions."] },
+  "agents": {
+    "review": {
+      "prepend": ["{{include:review/context.md}}"],
+      "append": ["Prefer a short list of actionable findings."]
+    }
+  }
+}

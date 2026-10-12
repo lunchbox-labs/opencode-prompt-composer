@@ -1,0 +1,67 @@
+name: Check
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run check
+      - run: npm run test:package
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        composition: [standalone, config-first]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm ci
+      - name: Check out config-only compatibility baseline
+        if: matrix.composition != 'standalone'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: lunchbox-labs/opencode-config-composer
+          ref: 34c4e8491cd33ff9f7952623882a98738c6e752d
+          path: compatibility/config-composer
+          persist-credentials: false
+      - name: Build config-only package
+        if: matrix.composition != 'standalone'
+        working-directory: compatibility/config-composer
+        run: |
+          npm ci
+          npm run build
+      - name: Test standalone
+        if: matrix.composition == 'standalone'
+        run: npm run test:native
+      - name: Test coexistence
+        if: matrix.composition != 'standalone'
+        run: npm run test:native
+        env:
+          CONFIG_COMPOSER_DIR: ${{ github.workspace }}/compatibility/config-composer
