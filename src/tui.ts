@@ -127,6 +127,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
     check = navigation.checkpoint();
   };
   const sources = (snapshot: Snapshot, apply: () => Promise<void>) => {
+    const path = join(snapshot.project, ".opencode/prompt-composer.jsonc");
     navigation.menu({
       title: "Prompt settings source",
       options: [
@@ -134,9 +135,15 @@ const PromptComposerTui: TuiPlugin = (api) => {
           title: doc.path,
           value: doc.path,
         })),
-        ...(snapshot.settings.documents.length === 0 &&
+        ...(!snapshot.settings.documents.some((doc) => doc.path === path) &&
         projectDiscoveryEnabled()
-          ? [{ title: "Create project prompt settings", value: "create" }]
+          ? [
+              {
+                title: "Create project prompt settings",
+                value: "create",
+                description: path,
+              },
+            ]
           : []),
       ],
       onSelect: (selected) => {
@@ -148,10 +155,6 @@ const PromptComposerTui: TuiPlugin = (api) => {
                 "Project prompt discovery is disabled. Use an enabled global or custom settings source.",
               );
             }
-            const path = join(
-              snapshot.project,
-              ".opencode/prompt-composer.jsonc",
-            );
             await mkdir(dirname(path), { recursive: true });
             assertCurrent(snapshot);
             await writeFile(path, '{\n  "agents": {}\n}\n', {
