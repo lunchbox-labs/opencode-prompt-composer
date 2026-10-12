@@ -67,6 +67,21 @@ test("project disable flag keeps global, home and custom discovery", async (t) =
   ]);
 });
 
+test("project disable flag is case-insensitive like OpenCode's boolean flags", async (t) => {
+  const f = await fixture(t);
+  for (const value of ["TRUE", "True", "1"]) {
+    const result = await discoverPrompts(
+      { directory: f.nested, worktree: f.project },
+      { ...f.env, OPENCODE_DISABLE_PROJECT_CONFIG: value },
+    );
+    assert.deepEqual(
+      result.directories,
+      [f.global, join(f.home, ".opencode"), f.custom],
+      value,
+    );
+  }
+});
+
 test("deduplicates repeated roots and respects worktree traversal boundary", async (t) => {
   const f = await fixture(t);
   await mkdir(join(f.root, ".opencode/prompts"), { recursive: true });

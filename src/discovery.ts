@@ -45,8 +45,9 @@ function contained(root: string, path: string): boolean {
 export function projectDiscoveryEnabled(
   environment: NodeJS.ProcessEnv = process.env,
 ): boolean {
+  // OpenCode's Flag.truthy lowercases the value, so TRUE and True also disable.
   return !["true", "1"].includes(
-    environment.OPENCODE_DISABLE_PROJECT_CONFIG ?? "",
+    (environment.OPENCODE_DISABLE_PROJECT_CONFIG ?? "").toLowerCase(),
   );
 }
 
