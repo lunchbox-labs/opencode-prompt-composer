@@ -132,7 +132,8 @@ export async function exercisePromptEditor(
   preview.onConfirm?.();
   api.ui.dialog.clear();
   await view("Prompt settings saved");
-  assert.match(await readFile(settingsPath, "utf8"), /Editor verified/);
+  const saved = await readFile(settingsPath, "utf8");
+  assert.match(saved, /Editor verified/);
   current = undefined;
   commands.get("prompt-composer.compose")!();
   await view("Compose prompts");
@@ -142,6 +143,7 @@ export async function exercisePromptEditor(
     agent: Record<string, { prompt?: string }>;
   };
   assert.match(config.agent.review.prompt ?? "", /Editor verified/);
+  assert.equal(await readFile(settingsPath, "utf8"), saved);
 }
 
 /** Exercise the same full snapshot loader and revision-checked apply path as Config Composer's TUI. */

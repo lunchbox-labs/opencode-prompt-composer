@@ -422,6 +422,7 @@ test(
       "Check Project evidence $ARGUMENTS {{include:literal.md}}",
     );
     assert.equal(config.command.check.subtask, true);
+    assert.equal(await readFile(settingsPath, "utf8"), settingsText);
     const baseline = readState(config, project);
     assert.match(
       baseline.native.agent?.review?.prompt ?? "",
@@ -469,6 +470,7 @@ test(
       reloaded.command.check.template,
       "Check Project updated $ARGUMENTS {{include:literal.md}}",
     );
+    assert.equal(await readFile(settingsPath, "utf8"), settingsText);
     if (configPlugin !== undefined) {
       const profilePath = join(project, ".opencode/config-composer.jsonc");
       const profile = JSON.parse(await readFile(profilePath, "utf8")) as {
@@ -482,7 +484,6 @@ test(
         cleared.command.check.template,
         reloaded.command.check.template,
       );
-      assert.doesNotThrow(() => readState(cleared, project));
       assert.equal(cleared.agent.helper.disable, true);
       assert.equal(
         cleared.agent.helper.prompt,
@@ -496,7 +497,6 @@ test(
           });
         },
       );
-      await writeFile(settingsPath, settingsText);
     } else {
       assert.equal(config.agent.helper.disable, true);
       assert.equal(
@@ -521,11 +521,14 @@ test(
         "Help {{include:review/body.md}}",
       );
     }
+    // Check authored files before fixture writes can hide a plugin mutation.
+    assert.equal(await readFile(agentPath, "utf8"), agentText);
+    assert.equal(await readFile(helperPath, "utf8"), helperText);
+
     // Command-only includes work independently of agent fragment settings.
-    await writeFile(
-      agentPath,
-      "---\ndescription: Review changes\nmode: primary\n---\nReview",
-    );
+    const commandOnlyAgentText =
+      "---\ndescription: Review changes\nmode: primary\n---\nReview";
+    await writeFile(agentPath, commandOnlyAgentText);
     await writeFile(settingsPath, "{}");
     const commandOnly = await reload();
     assert.equal(commandOnly.agent.review.prompt, "Review");
@@ -536,10 +539,8 @@ test(
     if (configPlugin !== undefined) {
       await exerciseConfigEditor(configPlugin, shared, api);
     }
-    await writeFile(agentPath, agentText);
-    await writeFile(settingsPath, settingsText);
     assert.equal(await readFile(helperPath, "utf8"), helperText);
-    assert.equal(await readFile(agentPath, "utf8"), agentText);
-    assert.equal(await readFile(settingsPath, "utf8"), settingsText);
+    assert.equal(await readFile(agentPath, "utf8"), commandOnlyAgentText);
+    assert.equal(await readFile(settingsPath, "utf8"), "{}");
   },
 );
