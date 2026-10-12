@@ -46,7 +46,7 @@ export function projectDiscoveryEnabled(
   environment: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return !["true", "1"].includes(
-    environment.OPENCODE_DISABLE_PROJECT_CONFIG ?? "",
+    environment.OPENCODE_DISABLE_PROJECT_CONFIG?.toLowerCase() ?? "",
   );
 }
 

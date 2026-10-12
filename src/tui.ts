@@ -94,10 +94,11 @@ const PromptComposerTui: TuiPlugin = (api) => {
       title: "Save prompt changes?",
       message: `${plan.edits.map((edit) => edit.path).join("\n")}\n\n${prompts}\n\n${plan.preview.diagnostics.map((item) => item.message).join("\n")}\n\nSaving does not apply to the running instance.`,
       onConfirm: () => {
+        if (!check()) {
+          return;
+        }
+        check = () => false;
         run(async () => {
-          if (!check()) {
-            return;
-          }
           assertCurrent(snapshot);
           await verifySharedFilesystem(
             api,
@@ -106,6 +107,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
           );
           assertCurrent(snapshot);
           const latest = await load();
+          assertCurrent(snapshot);
           if (
             JSON.stringify(latest.native) !== JSON.stringify(snapshot.native)
           ) {
@@ -124,14 +126,43 @@ const PromptComposerTui: TuiPlugin = (api) => {
     });
     check = navigation.checkpoint();
   };
-  const sources = (snapshot: Snapshot) => {
+  const sources = (snapshot: Snapshot, apply: () => Promise<void>) => {
     navigation.menu({
       title: "Prompt settings source",
-      options: snapshot.settings.documents.map((doc) => ({
-        title: doc.path,
-        value: doc.path,
-      })),
+      options: [
+        ...snapshot.settings.documents.map((doc) => ({
+          title: doc.path,
+          value: doc.path,
+        })),
+        ...(snapshot.settings.documents.length === 0 &&
+        projectDiscoveryEnabled()
+          ? [{ title: "Create project prompt settings", value: "create" }]
+          : []),
+      ],
       onSelect: (selected) => {
+        if (selected.value === "create") {
+          run(async () => {
+            assertCurrent(snapshot);
+            if (!projectDiscoveryEnabled()) {
+              throw new SettingsError(
+                "Project prompt discovery is disabled. Use an enabled global or custom settings source.",
+              );
+            }
+            const path = join(
+              snapshot.project,
+              ".opencode/prompt-composer.jsonc",
+            );
+            await mkdir(dirname(path), { recursive: true });
+            assertCurrent(snapshot);
+            await writeFile(path, '{\n  "agents": {}\n}\n', {
+              flag: "wx",
+              mode: 0o600,
+            });
+            assertCurrent(snapshot);
+            await apply();
+          });
+          return;
+        }
         const doc = snapshot.settings.documents.find(
           (item) => item.path === selected.value,
         );
@@ -150,7 +181,6 @@ const PromptComposerTui: TuiPlugin = (api) => {
           ],
           onSelect: (field) => {
             const key = field.value;
-            let check = () => false;
             navigation.prompt({
               title: field.title,
               value:
@@ -158,6 +188,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
                   ? doc.text
                   : JSON.stringify(Reflect.get(doc.value, key) ?? {}, null, 2),
               onConfirm: (value) => {
+                const check = navigation.checkpoint();
                 run(async () => {
                   if (!check()) {
                     return;
@@ -169,22 +200,23 @@ const PromptComposerTui: TuiPlugin = (api) => {
                     key === "document"
                       ? value
                       : editSetting(doc.text, [key], parsed);
-                  review(
-                    snapshot,
-                    await planEdits(snapshot.settings, snapshot.native, [
-                      { path: doc.path, text },
-                    ]),
+                  const plan = await planEdits(
+                    snapshot.settings,
+                    snapshot.native,
+                    [{ path: doc.path, text }],
                   );
+                  if (check()) {
+                    review(snapshot, plan);
+                  }
                 });
               },
             });
-            check = navigation.checkpoint();
           },
         });
       },
     });
   };
-  const apply = async () => {
+  const applySaved = async () => {
     const directory = api.state.path.directory;
     const client = api.client;
     const status = await client.session.status({ directory });
@@ -266,8 +298,19 @@ const PromptComposerTui: TuiPlugin = (api) => {
         "The current OpenCode instance has reloaded its prompt settings.",
     });
   };
-  const open = async () => {
-    const snapshot = await load();
+  let applying = false;
+  const apply = async () => {
+    if (applying) {
+      return;
+    }
+    applying = true;
+    try {
+      await applySaved();
+    } finally {
+      applying = false;
+    }
+  };
+  const open = () => {
     navigation.menu(
       {
         title: "Compose prompts",
@@ -275,17 +318,18 @@ const PromptComposerTui: TuiPlugin = (api) => {
           { title: "Edit prompt settings…", value: "edit" },
           { title: "Preview effective prompts and notices", value: "preview" },
           { title: "Apply saved prompt settings", value: "apply" },
-          ...(snapshot.settings.documents.length === 0 &&
-          projectDiscoveryEnabled()
-            ? [{ title: "Create project prompt settings", value: "create" }]
-            : []),
         ],
         onSelect: (selected) => {
           run(async () => {
+            if (selected.value === "apply") {
+              await apply();
+              return;
+            }
+            const snapshot = await load();
             assertCurrent(snapshot);
             switch (selected.value) {
               case "edit":
-                sources(snapshot);
+                sources(snapshot, apply);
                 break;
               case "preview":
                 navigation.alert({
@@ -299,27 +343,6 @@ const PromptComposerTui: TuiPlugin = (api) => {
                   ].join("\n\n"),
                 });
                 break;
-              case "apply":
-                await apply();
-                break;
-              case "create": {
-                if (!projectDiscoveryEnabled()) {
-                  throw new SettingsError(
-                    "Project prompt discovery is disabled. Use an enabled global or custom settings source.",
-                  );
-                }
-                const path = join(
-                  snapshot.project,
-                  ".opencode/prompt-composer.jsonc",
-                );
-                await mkdir(dirname(path), { recursive: true });
-                await writeFile(path, '{\n  "agents": {}\n}\n', {
-                  flag: "wx",
-                  mode: 0o600,
-                });
-                await apply();
-                break;
-              }
             }
           });
         },
@@ -336,14 +359,6 @@ const PromptComposerTui: TuiPlugin = (api) => {
         category: "Prompts",
         slashName: "compose-prompts",
         run: () => run(open),
-      },
-      {
-        name: "prompt-composer.apply",
-        title: "Apply saved prompt settings",
-        namespace: "palette",
-        category: "Prompts",
-        slashName: "prompt-reload",
-        run: () => run(apply),
       },
     ],
   });

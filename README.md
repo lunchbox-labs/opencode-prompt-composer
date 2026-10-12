@@ -42,7 +42,17 @@ OpenCode continues to own agents, commands, skills, models and permissions. Prom
 
 If you choose to install both packages, register the config-only Config Composer first so prompt operations see its final enabled agents. Only this optional combination needs [Config Composer #82](https://github.com/lunchbox-labs/opencode-config-composer/pull/82) for editor coexistence. [Migration notes](docs/migration.md).
 
-## Use a local build
+## Install
+
+Add the published package to the `plugin` list in `opencode.jsonc`. Add it to `tui.jsonc` too if you want the prompt editor:
+
+```jsonc
+{ "plugin": ["@lunchbox-labs/opencode-prompt-composer"] }
+```
+
+OpenCode selects the server and TUI entrypoints. Config Composer is not required.
+
+### Use a local build
 
 Run `npm ci`, `npm run build`, and `npm pack`; install the tarball into a separate directory. Register the absolute installed package directory in the `plugin` list of `opencode.jsonc` and, for the editor, `tui.jsonc`. OpenCode selects each entrypoint. No registry release is required.
 
@@ -50,7 +60,11 @@ Run `npm ci`, `npm run build`, and `npm pack`; install the tarball into a separa
 { "plugin": ["/absolute/path/to/installed/opencode-prompt-composer"] }
 ```
 
-`/compose-prompts` edits defaults or agent rules as JSON, previews effective prompts and notices, and saves JSONC without removing comments. `/prompt-reload` applies saved settings to the current instance when agents are idle. The editor checks the server filesystem and rejects stale settings or changed include dependencies. Edit snippet files through your normal editor; authored OpenCode files remain untouched. Previews use OpenCode’s loaded agent and command bodies. After editing those native files externally, reload before previewing or saving prompt rules.
+## Edit prompt settings
+
+`/compose-prompts` edits defaults or agent rules as JSON, previews effective agent prompts and notices, and saves JSONC without removing comments. Select **Apply saved prompt settings** from its main menu when agents are idle. This action remains available after files change. If no settings source exists, the edit menu can create project settings when project discovery is enabled.
+
+The editor checks the server filesystem and rejects stale settings or changed include dependencies. Edit snippet files through your normal editor; authored OpenCode files remain untouched. Composition uses OpenCode’s loaded agent and command bodies. After editing those native files externally, reload before previewing or saving prompt rules.
 
 ## Examples and checks
 
