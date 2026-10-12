@@ -42,6 +42,14 @@ function contained(root: string, path: string): boolean {
   return local !== ".." && !local.startsWith(`..${sep}`) && !isAbsolute(local);
 }
 
+export function projectDiscoveryEnabled(
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return !["true", "1"].includes(
+    environment.OPENCODE_DISABLE_PROJECT_CONFIG ?? "",
+  );
+}
+
 /** Mirrors ConfigPaths.directories in OpenCode 1.18.34; environment is injectable for isolated tests. */
 export async function discoveryDirectories(
   context: DiscoveryContext,
@@ -53,9 +61,7 @@ export async function discoveryDirectories(
     "opencode",
   );
   const directories = [global];
-  if (
-    !["true", "1"].includes(environment.OPENCODE_DISABLE_PROJECT_CONFIG ?? "")
-  ) {
+  if (projectDiscoveryEnabled(environment)) {
     const stop =
       context.worktree === "/" ? undefined : resolve(context.worktree);
     for (

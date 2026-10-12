@@ -192,4 +192,49 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   const stale = await view("Prompt Composer");
   assert.match(stale.message ?? "", /Prompt files changed/);
   assert.equal(config.agent!.review!.prompt, "Review\n\nAfter");
+  const previousDisable = process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
+  t.after(() => {
+    if (previousDisable === undefined) {
+      delete process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
+    } else {
+      process.env.OPENCODE_DISABLE_PROJECT_CONFIG = previousDisable;
+    }
+  });
+  for (const value of ["1", "true"]) {
+    await t.test(
+      `project creation is unavailable when discovery is disabled by ${value}`,
+      async () => {
+        process.env.OPENCODE_DISABLE_PROJECT_CONFIG = value;
+        config = structuredClone(authored);
+        await hooks.config!(config);
+        current = undefined;
+        commands.get("prompt-composer.compose")!();
+        const menu = await view("Compose prompts");
+        assert.equal(
+          menu.options?.some((option) => option.value === "create"),
+          false,
+        );
+        menu.onSelect?.({
+          title: "Create project prompt settings",
+          value: "create",
+        });
+        assert.match(
+          (await view("Prompt Composer")).message ?? "",
+          /discovery is disabled/,
+        );
+        await assert.rejects(readFile(path), { code: "ENOENT" });
+      },
+    );
+  }
+  delete process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
+  config = structuredClone(authored);
+  await hooks.config!(config);
+  current = undefined;
+  commands.get("prompt-composer.compose")!();
+  assert.equal(
+    (await view("Compose prompts")).options?.some(
+      (option) => option.value === "create",
+    ),
+    true,
+  );
 });

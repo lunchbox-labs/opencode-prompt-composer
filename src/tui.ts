@@ -9,6 +9,7 @@ import { type EditPlan, editSetting, planEdits, savePlan } from "./editor.ts";
 import { compose } from "./runtime.ts";
 import { fingerprint, readState } from "./runtime-state.ts";
 import { loadSettings } from "./settings.ts";
+import { projectDiscoveryEnabled } from "./discovery.ts";
 
 const PromptComposerTui: TuiPlugin = (api) => {
   const navigation = dialogNavigation(api);
@@ -274,7 +275,8 @@ const PromptComposerTui: TuiPlugin = (api) => {
           { title: "Edit prompt settings…", value: "edit" },
           { title: "Preview effective prompts and notices", value: "preview" },
           { title: "Apply saved prompt settings", value: "apply" },
-          ...(snapshot.settings.documents.length === 0
+          ...(snapshot.settings.documents.length === 0 &&
+          projectDiscoveryEnabled()
             ? [{ title: "Create project prompt settings", value: "create" }]
             : []),
         ],
@@ -301,6 +303,11 @@ const PromptComposerTui: TuiPlugin = (api) => {
                 await apply();
                 break;
               case "create": {
+                if (!projectDiscoveryEnabled()) {
+                  throw new SettingsError(
+                    "Project prompt discovery is disabled. Use an enabled global or custom settings source.",
+                  );
+                }
                 const path = join(
                   snapshot.project,
                   ".opencode/prompt-composer.jsonc",
