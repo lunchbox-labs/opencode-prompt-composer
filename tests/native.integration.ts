@@ -82,7 +82,7 @@ test(
           "--no-fund",
           `${name}@${version}`,
         ],
-        { timeout: 120_000 },
+        { timeout: 120_000, signal: t.signal },
       );
       binary = join(
         root,
@@ -94,14 +94,18 @@ test(
     }
     assert.equal(
       (
-        await execute(binary, ["--version"], { env, timeout: 30_000 })
+        await execute(binary, ["--version"], {
+          env,
+          timeout: 30_000,
+          signal: t.signal,
+        })
       ).stdout.trim(),
       version,
     );
     const packed = await execute(
       process.execPath,
       [npm, "pack", "--ignore-scripts", "--json", "--pack-destination", root],
-      { cwd: resolve(".") },
+      { cwd: resolve("."), timeout: 60_000, signal: t.signal },
     );
     const [{ filename }] = JSON.parse(packed.stdout) as { filename: string }[];
     const install = join(root, "installed");
@@ -117,7 +121,7 @@ test(
         "--no-fund",
         join(root, filename),
       ],
-      { timeout: 120_000 },
+      { timeout: 120_000, signal: t.signal },
     );
     const plugin = join(
       install,
@@ -198,6 +202,7 @@ test(
         );
       });
     });
+    t.signal.throwIfAborted();
     modelServer.listen(0, "127.0.0.1");
     await once(modelServer, "listening");
     closeModel = () => {
@@ -254,6 +259,7 @@ test(
         }),
       );
     }
+    t.signal.throwIfAborted();
     const child = spawn(
       binary,
       ["serve", "--hostname", "127.0.0.1", "--port", "0", "--print-logs"],
@@ -280,12 +286,9 @@ test(
       ) {
         const exited = once(child, "exit");
         if (process.platform === "win32") {
-          await execute("taskkill", [
-            "/pid",
-            String(child.pid),
-            "/T",
-            "/F",
-          ]).catch(() => undefined);
+          await execute("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+            timeout: 10_000,
+          }).catch(() => undefined);
         } else {
           try {
             process.kill(-child.pid, "SIGTERM");
@@ -319,7 +322,12 @@ test(
           "x-opencode-directory": project,
         },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.any([t.signal, AbortSignal.timeout(60_000)]),
+      }).catch((error: unknown) => {
+        throw new Error(
+          `Native request ${path} failed.\n${logs}\nModel requests: ${received.length}`,
+          { cause: error },
+        );
       });
       assert.ok(
         response.ok,

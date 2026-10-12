@@ -19,7 +19,7 @@ test(
     const packed = await execute(
       process.execPath,
       [npm, "pack", "--ignore-scripts", "--json", "--pack-destination", root],
-      { cwd: resolve(".") },
+      { cwd: resolve("."), timeout: 60_000, signal: t.signal },
     );
     const [{ filename, files }] = JSON.parse(packed.stdout) as {
       filename: string;
@@ -43,7 +43,7 @@ test(
         "@opencode-ai/plugin@1.18.34",
         "@types/node@24.19.1",
       ],
-      { timeout: 120_000 },
+      { timeout: 120_000, signal: t.signal },
     );
     const project = join(root, "project");
     await mkdir(join(project, ".opencode/prompts"), { recursive: true });
@@ -67,6 +67,8 @@ assert.equal(config.agent.review.prompt, 'Packed rules');
     );
     await execute(process.execPath, [join(root, "consumer.mjs"), project], {
       cwd: root,
+      timeout: 60_000,
+      signal: t.signal,
     });
     await writeFile(
       join(root, "consumer.mts"),
@@ -92,7 +94,7 @@ console.log(id);
         "ES2023",
         join(root, "consumer.mts"),
       ],
-      { cwd: root },
+      { cwd: root, timeout: 60_000, signal: t.signal },
     );
     const manifest = JSON.parse(
       await readFile(
