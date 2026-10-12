@@ -8,6 +8,7 @@ import { join, resolve } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { test } from "node:test";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import { readState } from "../src/runtime-state.ts";
 
 const execute = promisify(execFile);
@@ -347,6 +348,27 @@ test(
     );
     if (configPlugin !== undefined) {
       assert.equal(config.agent.review.model, "fixture/model", logs);
+      if (process.env.CONFIG_COMPOSER_ORDER === "prompt-first") {
+        const module = (await import(
+          pathToFileURL(
+            join(
+              configPlugin,
+              "dist/config-composer/composition/runtime-baseline.js",
+            ),
+          ).href
+        )) as {
+          readRuntimeBaseline: (
+            config: unknown,
+            location: { root: string; directory: string },
+          ) => unknown;
+        };
+        assert.doesNotThrow(() =>
+          module.readRuntimeBaseline(config, {
+            root: project,
+            directory: project,
+          }),
+        );
+      }
     }
     const session = (await api("/session", {})) as { id: string };
     const message = await api(`/session/${session.id}/message`, {
@@ -373,6 +395,22 @@ test(
       reloaded.command.check.template,
       "Check Project updated $ARGUMENTS {{include:literal.md}}",
     );
+    if (configPlugin !== undefined) {
+      const profilePath = join(project, ".opencode/config-composer.jsonc");
+      const profile = JSON.parse(await readFile(profilePath, "utf8")) as {
+        activeProfiles: string[];
+      };
+      profile.activeProfiles = [];
+      await writeFile(profilePath, JSON.stringify(profile));
+      await api("/instance/dispose", {});
+      const cleared = (await api("/config")) as typeof config;
+      assert.equal(cleared.agent.review.prompt, reloaded.agent.review.prompt);
+      assert.equal(
+        cleared.command.check.template,
+        reloaded.command.check.template,
+      );
+      assert.doesNotThrow(() => readState(cleared, project));
+    }
     assert.equal(await readFile(agentPath, "utf8"), agentText);
     assert.equal(await readFile(settingsPath, "utf8"), settingsText);
   },
