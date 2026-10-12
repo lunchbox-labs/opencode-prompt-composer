@@ -6,12 +6,14 @@ import { Ajv } from "ajv";
 import {
   type Node as JsonNode,
   type ParseError,
+  findNodeAtLocation,
   parse,
   parseTree,
+  printParseErrorCode,
 } from "jsonc-parser";
 import schema from "../schema.json" with { type: "json" };
 import { type PromptInventory, discoverPrompts } from "./discovery.ts";
-import { SettingsError } from "./errors.ts";
+import { SettingsError, sourcePosition } from "./errors.ts";
 
 export interface Operations {
   prepend?: string[];
@@ -48,15 +50,24 @@ export interface LoadedSettings {
 }
 const validate = new Ajv({ allErrors: true }).compile<PromptDocument>(schema);
 
-function uniqueKeys(node: JsonNode | undefined): void {
+function uniqueKeys(node: JsonNode | undefined): number | undefined {
   if (node?.type === "object") {
-    const keys =
-      node.children?.map((child): unknown => child.children?.[0].value) ?? [];
-    if (new Set(keys).size !== keys.length) {
-      throw new SettingsError("Duplicate JSON keys in prompt settings.");
+    const keys = new Set<unknown>();
+    for (const property of node.children ?? []) {
+      const key = property.children?.[0];
+      if (keys.has(key?.value)) {
+        return key?.offset;
+      }
+      keys.add(key?.value);
     }
   }
-  node?.children?.forEach(uniqueKeys);
+  for (const child of node?.children ?? []) {
+    const duplicate = uniqueKeys(child);
+    if (duplicate !== undefined) {
+      return duplicate;
+    }
+  }
+  return undefined;
 }
 
 const sourceByteLimit = 1024 * 1024;
@@ -70,14 +81,50 @@ function validateSourceText(text: string, limit = sourceByteLimit): void {
   }
 }
 
-export function parseSettings(text: string): PromptDocument {
-  validateSourceText(text);
+export function parseSettings(text: string, path?: string): PromptDocument {
+  const fail = (reason: string, offset?: number): never => {
+    const location =
+      offset === undefined ? "" : `:${sourcePosition(text, offset)}`;
+    throw new SettingsError(
+      `${reason}${path === undefined ? (location === "" ? "" : ` At input${location}.`) : ` Source: ${JSON.stringify(path)}${location}.`}`,
+    );
+  };
+  try {
+    validateSourceText(text);
+  } catch (error) {
+    if (!(error instanceof SettingsError)) {
+      throw error;
+    }
+    fail(error.message);
+  }
   const errors: ParseError[] = [];
   const value: unknown = parse(text, errors, { allowTrailingComma: true });
-  uniqueKeys(parseTree(text));
-  if (errors.length !== 0 || !validate(value)) {
-    throw new SettingsError(
+  if (errors.length !== 0) {
+    fail(
+      `Invalid prompt settings. ${printParseErrorCode(errors[0].error)}.`,
+      errors[0].offset,
+    );
+  }
+  const tree = parseTree(text, [], { allowTrailingComma: true });
+  const duplicate = uniqueKeys(tree);
+  if (duplicate !== undefined) {
+    fail("Duplicate JSON keys in prompt settings.", duplicate);
+  }
+  if (!validate(value)) {
+    const first = validate.errors?.[0];
+    let node = tree;
+    for (const segment of first?.instancePath.split("/").slice(1) ?? []) {
+      const key = segment.replaceAll("~1", "/").replaceAll("~0", "~");
+      node =
+        node === undefined
+          ? undefined
+          : findNodeAtLocation(node, [
+              node.type === "array" ? Number(key) : key,
+            ]);
+    }
+    return fail(
       `Invalid prompt settings. ${validate.errors?.map((item) => `${item.instancePath} ${item.message ?? ""}`).join("; ") ?? ""}`,
+      node?.offset,
     );
   }
   return value;
@@ -194,7 +241,7 @@ export async function loadSettings(
         "Prompt settings exceed the 8 MiB total text limit.",
       );
     }
-    const value = parseSettings(text);
+    const value = parseSettings(text, path);
     result.documents.push({ ...file, text, value });
     if (value.defaults !== undefined) {
       result.effective.defaults = {

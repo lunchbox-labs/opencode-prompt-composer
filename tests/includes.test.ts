@@ -162,3 +162,56 @@ test("enforces text, snippet, composed-size, count and nesting budgets", async (
     /count or nesting/,
   );
 });
+
+test("malformed nested markers report original snippet positions without body text", async (t) => {
+  const { sources } = await fixture(t);
+  await writeFile(
+    join(sources, "a.md"),
+    "\r\n\r\n  PRIVATE\r\n  {{include:broken",
+  );
+  await assert.rejects(
+    expandIncludes("{{include:a.md}}", sources),
+    (error: Error) => {
+      assert.match(error.message, /invalid syntax/);
+      assert.match(error.message, /a\.md.*:4:3/);
+      assert.doesNotMatch(error.message, /PRIVATE|broken/);
+      return true;
+    },
+  );
+});
+
+test("diagnostics bound long include chains and references", async (t) => {
+  const { sources } = await fixture(t);
+  for (let n = 0; n < 34; n++) {
+    await writeFile(join(sources, `${n}.md`), `{{include:${n + 1}.md}}`);
+  }
+  await assert.rejects(
+    expandIncludes("{{include:0.md}}", sources),
+    (error: Error) => {
+      assert.match(error.message, /nesting limit/);
+      assert.match(error.message, /0\.md.* -> .*32\.md/);
+      assert.ok(error.message.length < 2000);
+      return true;
+    },
+  );
+  await assert.rejects(
+    expandIncludes(`{{include:${"a".repeat(20000)}.md}}`, sources),
+    (error: Error) => {
+      assert.match(error.message, /does not exist/);
+      assert.ok(error.message.length < 2000);
+      return true;
+    },
+  );
+});
+
+test("unsafe marker payloads cannot dump body text into diagnostics", async (t) => {
+  const { sources } = await fixture(t);
+  await assert.rejects(
+    expandIncludes("{{include:../unsafe\nPRIVATE BODY}}", sources),
+    (error: Error) => {
+      assert.match(error.message, /safe relative/);
+      assert.doesNotMatch(error.message, /PRIVATE BODY/);
+      return true;
+    },
+  );
+});
