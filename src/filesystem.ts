@@ -22,7 +22,11 @@ async function roots(context: SettingsContext) {
 }
 
 async function identity(path: string) {
-  const canonical = await realpath(path);
+  let canonical = await realpath(path);
+  // The pinned Bun host returns a bare drive for Windows roots; stat needs C:\.
+  if (process.platform === "win32" && /^[a-z]:$/i.test(canonical)) {
+    canonical += "\\";
+  }
   const info = await stat(canonical, { bigint: true });
   if (!info.isDirectory() || info.ino === 0n || info.birthtimeNs === 0n) {
     throw new SettingsError(
