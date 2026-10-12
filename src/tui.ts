@@ -82,6 +82,72 @@ const PromptComposerTui: TuiPlugin = (api) => {
       );
     }
   };
+  let readingFiles = false;
+  const readFiles = (show: (snapshot: Snapshot) => void, origin?: Snapshot) => {
+    if (readingFiles) {
+      return;
+    }
+    readingFiles = true;
+    const check = navigation.checkpoint();
+    const directory = api.state.path.directory;
+    const project = root();
+    run(async () => {
+      try {
+        if (origin !== undefined) {
+          assertCurrent(origin);
+        }
+        const snapshot = await load();
+        if (!check()) {
+          return;
+        }
+        if (directory !== api.state.path.directory || project !== root()) {
+          throw new SettingsError(
+            "The OpenCode connection or project changed. Reopen the prompt editor.",
+          );
+        }
+        assertCurrent(snapshot);
+        show(snapshot);
+      } catch (error) {
+        if (check()) {
+          throw error;
+        }
+      } finally {
+        readingFiles = false;
+      }
+    });
+  };
+  const promptFiles = (snapshot: Snapshot) => {
+    const inventory = snapshot.settings.inventory;
+    if (inventory.files.size === 0) {
+      navigation.alert({
+        title: "Prompt files",
+        message: `No prompt files discovered. Add a .md or .txt file under prompts in an enabled discovery directory:\n\n${inventory.directories.join("\n")}`,
+      });
+      return;
+    }
+    navigation.menu({
+      title: "Prompt files",
+      options: [...inventory.files.keys()].map((name) => ({
+        title: name,
+        value: name,
+      })),
+      onSelect: (selected) => {
+        readFiles((latest) => {
+          const name = selected.value;
+          const source = latest.settings.inventory.files.get(name);
+          const shadowed =
+            latest.settings.inventory.candidates.get(name)?.slice(0, -1) ?? [];
+          navigation.alert({
+            title: "Prompt file source",
+            message:
+              source === undefined
+                ? `The prompt file ${name} is no longer discovered. Reopen Prompt files to refresh the list.`
+                : `Filename: ${name}\n\nInclude marker:\n{{include:${name}}}\n\nWinning path:\n${source.path}\n\nShadowed paths (discovery order):\n${shadowed.length === 0 ? "(none)" : shadowed.join("\n")}`,
+          });
+        }, snapshot);
+      },
+    });
+  };
   const review = (snapshot: Snapshot, plan: EditPlan) => {
     let check = () => false;
     const prompts = Object.entries(plan.preview.config.agent ?? {})
@@ -319,10 +385,15 @@ const PromptComposerTui: TuiPlugin = (api) => {
         title: "Compose prompts",
         options: [
           { title: "Edit prompt settings…", value: "edit" },
+          { title: "Browse prompt files", value: "files" },
           { title: "Preview effective prompts and notices", value: "preview" },
           { title: "Apply saved prompt settings", value: "apply" },
         ],
         onSelect: (selected) => {
+          if (selected.value === "files") {
+            readFiles(promptFiles);
+            return;
+          }
           run(async () => {
             if (selected.value === "apply") {
               await apply();
