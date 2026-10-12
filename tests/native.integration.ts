@@ -497,29 +497,47 @@ test(
         },
       );
       await writeFile(settingsPath, settingsText);
-
-      // Command-only downstream composition must also allow Config Composer's editor.
-      await writeFile(
-        agentPath,
-        "---\ndescription: Review changes\nmode: primary\n---\nReview",
-      );
-      await writeFile(settingsPath, "{}");
-      const commandOnly = await reload();
-      assert.equal(commandOnly.agent.review.prompt, "Review");
-      assert.equal(
-        commandOnly.command.check.template,
-        "Check Project updated $ARGUMENTS {{include:literal.md}}",
-      );
-      await exerciseConfigEditor(configPlugin, shared, api);
-      await writeFile(agentPath, agentText);
-      await writeFile(settingsPath, settingsText);
     } else {
       assert.equal(config.agent.helper.disable, true);
       assert.equal(
         config.agent.helper.prompt,
         "Help {{include:review/body.md}}",
       );
+      await writeFile(
+        helperPath,
+        helperText.replace("disable: true", "disable: false"),
+      );
+      const enabled = await reload();
+      assert.equal(enabled.agent.helper.disable, false);
+      assert.equal(
+        enabled.agent.helper.prompt,
+        "Help Project updated\n\nState uncertainty.\n\nHelper rule.",
+      );
+      await writeFile(helperPath, helperText);
+      const disabled = await reload();
+      assert.equal(disabled.agent.helper.disable, true);
+      assert.equal(
+        disabled.agent.helper.prompt,
+        "Help {{include:review/body.md}}",
+      );
     }
+    // Command-only includes work independently of agent fragment settings.
+    await writeFile(
+      agentPath,
+      "---\ndescription: Review changes\nmode: primary\n---\nReview",
+    );
+    await writeFile(settingsPath, "{}");
+    const commandOnly = await reload();
+    assert.equal(commandOnly.agent.review.prompt, "Review");
+    assert.equal(
+      commandOnly.command.check.template,
+      "Check Project updated $ARGUMENTS {{include:literal.md}}",
+    );
+    if (configPlugin !== undefined) {
+      await exerciseConfigEditor(configPlugin, shared, api);
+    }
+    await writeFile(agentPath, agentText);
+    await writeFile(settingsPath, settingsText);
     assert.equal(await readFile(helperPath, "utf8"), helperText);
     assert.equal(await readFile(agentPath, "utf8"), agentText);
     assert.equal(await readFile(settingsPath, "utf8"), settingsText);

@@ -41,6 +41,7 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   let changeDuring: "baseline" | "refresh" | undefined;
   let reloadReads = 0;
   const commands = new Map<string, () => void>();
+  const slashNames: string[] = [];
   let current: View | undefined;
   const render = (view: View) => {
     current = view;
@@ -50,9 +51,12 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     lifecycle: { signal: new AbortController().signal, onDispose() {} },
     route: { current: { name: "home" } },
     keymap: {
-      registerLayer(layer: { commands: { name: string; run: () => void }[] }) {
+      registerLayer(layer: {
+        commands: { name: string; slashName: string; run: () => void }[];
+      }) {
         for (const command of layer.commands) {
           commands.set(command.name, command.run);
+          slashNames.push(command.slashName);
         }
         return () => {};
       },
@@ -126,6 +130,7 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     },
   } as unknown as TuiPluginApi;
   await tui.tui(api, undefined, {} as TuiPluginMeta);
+  assert.deepEqual(slashNames, ["compose-prompts", "prompt-reload"]);
   async function view(title: string) {
     for (let n = 0; n < 200 && current?.title !== title; n++) {
       await setTimeout(5);

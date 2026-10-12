@@ -38,7 +38,9 @@ Composition order is default prepends, agent prepends, authored body, default ap
 
 Prompt Composer mirrors the pinned host's **agent/command directory order**: global OpenCode config directory; project `.opencode` directories from the opened directory upward to the worktree; home `.opencode`; then `OPENCODE_CONFIG_DIR`. Later files with the same relative filename win. Settings use the same order. `OPENCODE_DISABLE_PROJECT_CONFIG` disables project discovery. There are no custom prompt directories or source aliases. [Exact discovery behavior](docs/discovery.md).
 
-OpenCode continues to own agents, commands, skills, models and permissions. Prompt Composer discovers only its own prompt files and settings. It works alone or with the config-only Config Composer from [PR #80](https://github.com/lunchbox-labs/opencode-config-composer/pull/80); configuration profile switches do not select prompt rules. Register Config Composer first so prompt operations see its final enabled agents. Editor coexistence requires [Config Composer #82](https://github.com/lunchbox-labs/opencode-config-composer/pull/82), which excludes downstream prompt text from its configuration freshness checks; merged #80 alone does not support both editors. [Migration notes](docs/migration.md).
+OpenCode continues to own agents, commands, skills, models and permissions. Prompt Composer discovers only its own prompt files and settings. **It is fully usable on its own and has no dependency on Config Composer.** It does not read configuration profiles or the other plugin's settings, schema or runtime markers.
+
+If you choose to install both packages, register the config-only Config Composer first so prompt operations see its final enabled agents. Only this optional combination needs [Config Composer #82](https://github.com/lunchbox-labs/opencode-config-composer/pull/82) for editor coexistence. [Migration notes](docs/migration.md).
 
 ## Use a local build
 

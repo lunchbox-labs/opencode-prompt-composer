@@ -104,10 +104,17 @@ console.log(id);
         ),
         "utf8",
       ),
-    ) as { dependencies: Record<string, string> };
-    assert.equal(
-      manifest.dependencies["@lunchbox-labs/opencode-config-composer"],
-      undefined,
-    );
+    ) as Record<string, Record<string, string> | undefined>;
+    for (const field of [
+      "dependencies",
+      "optionalDependencies",
+      "peerDependencies",
+      "devDependencies",
+    ]) {
+      assert.equal(
+        manifest[field]?.["@lunchbox-labs/opencode-config-composer"],
+        undefined,
+      );
+    }
   },
 );

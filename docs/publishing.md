@@ -1,6 +1,6 @@
 # Publishing
 
-The `publish.yml` workflow follows Config Composer's two-job release setup: verify a stable tag already on `main`, check metadata, run checks plus packed-install and native tests, then publish the checksummed tarball. Only the publishing job receives OIDC permission, through the `npm` environment. This public repository enables npm provenance.
+The `publish.yml` workflow uses two jobs: verify a stable tag already on `main`, check metadata, run checks plus packed-install and native tests, then publish the checksummed tarball. Only the publishing job receives OIDC permission, through the `npm` environment. This public repository enables npm provenance.
 
 After your first manual npm release, configure [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) for `@lunchbox-labs/opencode-prompt-composer`:
 
