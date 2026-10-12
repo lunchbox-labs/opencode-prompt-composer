@@ -130,7 +130,7 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     },
   } as unknown as TuiPluginApi;
   await tui.tui(api, undefined, {} as TuiPluginMeta);
-  assert.deepEqual(slashNames, ["compose-prompts", "prompt-reload"]);
+  assert.deepEqual(slashNames, ["compose-prompts"]);
   async function view(title: string) {
     for (let n = 0; n < 200 && current?.title !== title; n++) {
       await setTimeout(5);
@@ -161,13 +161,18 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   assert.match(await readFile(path, "utf8"), /^\/\/ Keep comment/);
   assert.match(await readFile(path, "utf8"), /After/);
   assert.equal(config.agent!.review!.prompt, "Review");
-  commands.get("prompt-composer.apply")!();
+  current = undefined;
+  commands.get("prompt-composer.compose")!();
+  await view("Compose prompts");
+  choose("apply");
   await view("Prompt settings applied");
   assert.equal(reloadReads, 3);
   assert.equal(config.agent!.review!.prompt, "Review\n\nAfter");
   // A connection change while reading the old baseline must not dispose it.
   changeDuring = "baseline";
-  commands.get("prompt-composer.apply")!();
+  commands.get("prompt-composer.compose")!();
+  await view("Compose prompts");
+  choose("apply");
   assert.match(
     (await view("Prompt Composer")).message ?? "",
     /instance changed/,
@@ -178,7 +183,9 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
 
   // A connection change while receiving the new baseline must not report success.
   changeDuring = "refresh";
-  commands.get("prompt-composer.apply")!();
+  commands.get("prompt-composer.compose")!();
+  await view("Compose prompts");
+  choose("apply");
   assert.match(
     (await view("Prompt Composer")).message ?? "",
     /instance changed/,
@@ -189,6 +196,8 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   current = undefined;
   await rm(path);
   commands.get("prompt-composer.compose")!();
+  await view("Compose prompts");
+  choose("preview");
   const stale = await view("Prompt Composer");
   assert.match(stale.message ?? "", /Prompt files changed/);
   assert.equal(config.agent!.review!.prompt, "Review\n\nAfter");
@@ -209,7 +218,9 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
         await hooks.config!(config);
         current = undefined;
         commands.get("prompt-composer.compose")!();
-        const menu = await view("Compose prompts");
+        await view("Compose prompts");
+        choose("edit");
+        const menu = await view("Prompt settings source");
         assert.equal(
           menu.options?.some((option) => option.value === "create"),
           false,
@@ -231,8 +242,10 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   await hooks.config!(config);
   current = undefined;
   commands.get("prompt-composer.compose")!();
+  await view("Compose prompts");
+  choose("edit");
   assert.equal(
-    (await view("Compose prompts")).options?.some(
+    (await view("Prompt settings source")).options?.some(
       (option) => option.value === "create",
     ),
     true,

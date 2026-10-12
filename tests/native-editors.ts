@@ -127,7 +127,10 @@ export async function exercisePromptEditor(
   preview.onConfirm?.();
   await view("Prompt settings saved");
   assert.match(await readFile(settingsPath, "utf8"), /Editor verified/);
-  commands.get("prompt-composer.apply")!();
+  current = undefined;
+  commands.get("prompt-composer.compose")!();
+  await view("Compose prompts");
+  choose("apply");
   await view("Prompt settings applied");
   const config = (await request("/config")) as {
     agent: Record<string, { prompt?: string }>;
