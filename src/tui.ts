@@ -124,14 +124,41 @@ const PromptComposerTui: TuiPlugin = (api) => {
     });
     check = navigation.checkpoint();
   };
-  const sources = (snapshot: Snapshot) => {
+  const sources = (snapshot: Snapshot, apply: () => Promise<void>) => {
     navigation.menu({
       title: "Prompt settings source",
-      options: snapshot.settings.documents.map((doc) => ({
-        title: doc.path,
-        value: doc.path,
-      })),
+      options: [
+        ...snapshot.settings.documents.map((doc) => ({
+          title: doc.path,
+          value: doc.path,
+        })),
+        ...(snapshot.settings.documents.length === 0 &&
+        projectDiscoveryEnabled()
+          ? [{ title: "Create project prompt settings", value: "create" }]
+          : []),
+      ],
       onSelect: (selected) => {
+        if (selected.value === "create") {
+          run(async () => {
+            assertCurrent(snapshot);
+            if (!projectDiscoveryEnabled()) {
+              throw new SettingsError(
+                "Project prompt discovery is disabled. Use an enabled global or custom settings source.",
+              );
+            }
+            const path = join(
+              snapshot.project,
+              ".opencode/prompt-composer.jsonc",
+            );
+            await mkdir(dirname(path), { recursive: true });
+            await writeFile(path, '{\n  "agents": {}\n}\n', {
+              flag: "wx",
+              mode: 0o600,
+            });
+            await apply();
+          });
+          return;
+        }
         const doc = snapshot.settings.documents.find(
           (item) => item.path === selected.value,
         );
@@ -266,8 +293,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
         "The current OpenCode instance has reloaded its prompt settings.",
     });
   };
-  const open = async () => {
-    const snapshot = await load();
+  const open = () => {
     navigation.menu(
       {
         title: "Compose prompts",
@@ -275,17 +301,18 @@ const PromptComposerTui: TuiPlugin = (api) => {
           { title: "Edit prompt settings…", value: "edit" },
           { title: "Preview effective prompts and notices", value: "preview" },
           { title: "Apply saved prompt settings", value: "apply" },
-          ...(snapshot.settings.documents.length === 0 &&
-          projectDiscoveryEnabled()
-            ? [{ title: "Create project prompt settings", value: "create" }]
-            : []),
         ],
         onSelect: (selected) => {
           run(async () => {
+            if (selected.value === "apply") {
+              await apply();
+              return;
+            }
+            const snapshot = await load();
             assertCurrent(snapshot);
             switch (selected.value) {
               case "edit":
-                sources(snapshot);
+                sources(snapshot, apply);
                 break;
               case "preview":
                 navigation.alert({
@@ -299,27 +326,6 @@ const PromptComposerTui: TuiPlugin = (api) => {
                   ].join("\n\n"),
                 });
                 break;
-              case "apply":
-                await apply();
-                break;
-              case "create": {
-                if (!projectDiscoveryEnabled()) {
-                  throw new SettingsError(
-                    "Project prompt discovery is disabled. Use an enabled global or custom settings source.",
-                  );
-                }
-                const path = join(
-                  snapshot.project,
-                  ".opencode/prompt-composer.jsonc",
-                );
-                await mkdir(dirname(path), { recursive: true });
-                await writeFile(path, '{\n  "agents": {}\n}\n', {
-                  flag: "wx",
-                  mode: 0o600,
-                });
-                await apply();
-                break;
-              }
             }
           });
         },
@@ -336,14 +342,6 @@ const PromptComposerTui: TuiPlugin = (api) => {
         category: "Prompts",
         slashName: "compose-prompts",
         run: () => run(open),
-      },
-      {
-        name: "prompt-composer.apply",
-        title: "Apply saved prompt settings",
-        namespace: "palette",
-        category: "Prompts",
-        slashName: "prompt-reload",
-        run: () => run(apply),
       },
     ],
   });
