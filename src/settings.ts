@@ -190,7 +190,10 @@ export async function readSource(
     }
   } catch (error) {
     if (error instanceof SettingsError) {
-      throw error;
+      throw new SettingsError(
+        `${error.message} Source: ${JSON.stringify(path)}.`,
+        { cause: error },
+      );
     }
     throw new SettingsError(
       `Could not read prompt source ${path}. Check that it is a readable UTF-8 regular file.`,
