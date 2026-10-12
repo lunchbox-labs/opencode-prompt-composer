@@ -55,6 +55,6 @@ Run `npm ci`, `npm run build`, and `npm pack`; install the tarball into a separa
 - [Review guidance](docs/examples/review/README.md): one format shared by an agent and a native command.
 - [On-demand verification](docs/examples/skill-guidance/README.md): a skill includes a shared checklist when loaded.
 
-`npm run check`, `npm run test:package`, and `npm run test:native` cover source checks, packed installation, and real OpenCode behavior. Native tests use an isolated local model fixture and no provider account. CI runs on Linux and Windows, including both plugin orders with Config Composer #80. Nothing is published automatically.
+`npm run check`, `npm run test:package`, and `npm run test:native` cover source checks, packed installation, and real OpenCode behavior. Native tests use an isolated local model fixture and no provider account. CI runs on Linux and Windows, both standalone and with Config Composer first, using the compatibility fix from #82. Pull requests and ordinary pushes do not publish packages.
 
 Maintainers: [release workflow setup](docs/publishing.md) covers the initial manual release and later npm trusted publishing.
