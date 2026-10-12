@@ -378,6 +378,15 @@ test(
       );
       return response.json();
     }
+    // The pinned host caches ripgrep initialization globally. Disposing its first
+    // instance during a cold download caches an interrupted fiber on Windows.
+    // Finish that real dependency before testing instance reloads.
+    await writeFile(
+      join(project, "readiness.txt"),
+      "PromptComposerFixtureReady",
+    );
+    const readiness = await api("/find?pattern=PromptComposerFixtureReady");
+    assert.ok(Array.isArray(readiness) && readiness.length > 0, logs);
     const config = (await api("/config")) as {
       agent: Record<
         string,
