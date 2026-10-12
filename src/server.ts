@@ -5,6 +5,7 @@ import { loadSettings } from "./settings.ts";
 import { compose } from "./runtime.ts";
 import { publishState } from "./runtime-state.ts";
 import { verifyInventory, verifyReads } from "./editor.ts";
+import { captureFilesystem } from "./filesystem.ts";
 
 interface Bodies {
   agents: Record<string, string>;
@@ -93,10 +94,14 @@ const PromptComposer: Plugin = (input, options = {}) => {
         console.error(`[Prompt Composer] ${diagnostic}`);
       }
       lastDiagnostic = diagnostic;
-      publishState(config, options, native, context, [
-        ...settings.documents,
-        ...composed.reads,
-      ]);
+      publishState(
+        config,
+        options,
+        native,
+        context,
+        [...settings.documents, ...composed.reads],
+        await captureFilesystem(context).catch(() => undefined),
+      );
     },
     "tool.execute.after": async (input, output) => {
       if (input.tool !== "skill") {

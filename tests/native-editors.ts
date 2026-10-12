@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import type {
@@ -8,6 +8,7 @@ import type {
   TuiPluginMeta,
   TuiPluginModule,
 } from "@opencode-ai/plugin/tui";
+import { captureFilesystem } from "../src/filesystem.ts";
 
 export type Request = (path: string, body?: unknown) => Promise<unknown>;
 interface View {
@@ -108,7 +109,7 @@ export async function exercisePromptEditor(
     assert.equal(
       current?.title,
       title,
-      `${current?.message ?? ""}\nHost path: ${JSON.stringify(path)}\nRuntime: ${current?.title === "Prompt Composer" ? JSON.stringify(await request("/config")) : ""}`,
+      `${current?.message ?? ""}\nHost path: ${JSON.stringify(path)}\nRuntime: ${current?.title === "Prompt Composer" ? JSON.stringify(await request("/config")) : ""}\nLocal filesystem: ${current?.title === "Prompt Composer" ? JSON.stringify(await captureFilesystem({ root: api.state.path.worktree === "/" ? api.state.path.directory : api.state.path.worktree, directory: api.state.path.directory, worktree: api.state.path.worktree })) : ""}`,
     );
     return current;
   }
@@ -145,6 +146,45 @@ export async function exercisePromptEditor(
   await view("Prompt settings saved");
   const saved = await readFile(settingsPath, "utf8");
   assert.match(saved, /Editor verified/);
+  const running = await request("/config");
+  const snippetPath = join(dirname(settingsPath), "prompts/review/body.md");
+  const snippet = await readFile(snippetPath, "utf8");
+  const changedSnippet = `  ${snippet}\nSAVED SNIPPET\n\n`;
+  await writeFile(snippetPath, changedSnippet);
+  commands.get("prompt-composer.compose")!();
+  await view("Compose prompts");
+  choose("saved-preview");
+  choose("saved-preview");
+  await view("Saved prompt changes — not applied");
+  choose("agent:review");
+  const savedPages = await view("Agent: review — not applied — pages");
+  const savedText: string[] = [];
+  const pages = savedPages.options!.filter(
+    (item) => item.value !== "\u0000back",
+  );
+  for (const [index, page] of pages.entries()) {
+    choose(page.value);
+    savedText.push(
+      (
+        await view(
+          `Agent: review — not applied — page ${index + 1}/${pages.length}`,
+        )
+      ).message!,
+    );
+    api.ui.dialog.clear();
+    await view("Agent: review — not applied — pages");
+  }
+  assert.match(savedText.join(""), /Editor verified/);
+  assert.match(savedText.join(""), /SAVED SNIPPET\n\n/);
+  choose("\u0000back");
+  await view("Saved prompt changes — not applied");
+  choose("\u0000back");
+  await view("Compose prompts");
+  api.ui.dialog.clear();
+  assert.deepEqual(await request("/config"), running);
+  assert.equal(await readFile(settingsPath, "utf8"), saved);
+  assert.equal(await readFile(snippetPath, "utf8"), changedSnippet);
+  await writeFile(snippetPath, snippet);
   current = undefined;
   commands.get("prompt-composer.compose")!();
   await view("Compose prompts");
