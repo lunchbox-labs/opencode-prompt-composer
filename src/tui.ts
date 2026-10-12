@@ -94,10 +94,11 @@ const PromptComposerTui: TuiPlugin = (api) => {
       title: "Save prompt changes?",
       message: `${plan.edits.map((edit) => edit.path).join("\n")}\n\n${prompts}\n\n${plan.preview.diagnostics.map((item) => item.message).join("\n")}\n\nSaving does not apply to the running instance.`,
       onConfirm: () => {
+        if (!check()) {
+          return;
+        }
+        check = () => false;
         run(async () => {
-          if (!check()) {
-            return;
-          }
           assertCurrent(snapshot);
           await verifySharedFilesystem(
             api,
@@ -106,6 +107,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
           );
           assertCurrent(snapshot);
           const latest = await load();
+          assertCurrent(snapshot);
           if (
             JSON.stringify(latest.native) !== JSON.stringify(snapshot.native)
           ) {
@@ -177,7 +179,6 @@ const PromptComposerTui: TuiPlugin = (api) => {
           ],
           onSelect: (field) => {
             const key = field.value;
-            let check = () => false;
             navigation.prompt({
               title: field.title,
               value:
@@ -185,6 +186,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
                   ? doc.text
                   : JSON.stringify(Reflect.get(doc.value, key) ?? {}, null, 2),
               onConfirm: (value) => {
+                const check = navigation.checkpoint();
                 run(async () => {
                   if (!check()) {
                     return;
@@ -196,16 +198,17 @@ const PromptComposerTui: TuiPlugin = (api) => {
                     key === "document"
                       ? value
                       : editSetting(doc.text, [key], parsed);
-                  review(
-                    snapshot,
-                    await planEdits(snapshot.settings, snapshot.native, [
-                      { path: doc.path, text },
-                    ]),
+                  const plan = await planEdits(
+                    snapshot.settings,
+                    snapshot.native,
+                    [{ path: doc.path, text }],
                   );
+                  if (check()) {
+                    review(snapshot, plan);
+                  }
                 });
               },
             });
-            check = navigation.checkpoint();
           },
         });
       },

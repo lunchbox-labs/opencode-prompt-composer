@@ -30,6 +30,7 @@ export async function exercisePromptEditor(
   const path = await request("/path");
   const commands = new Map<string, () => void>();
   let current: View | undefined;
+  let closed: (() => void) | undefined;
   const render = (view: View) => {
     current = view;
   };
@@ -77,10 +78,14 @@ export async function exercisePromptEditor(
       DialogConfirm: render,
       DialogPrompt: render,
       dialog: {
-        replace(next: () => void) {
+        replace(next: () => void, onClose?: () => void) {
+          closed?.();
+          closed = onClose;
           next();
         },
         clear() {
+          closed?.();
+          closed = undefined;
           current = undefined;
         },
         get open() {
@@ -125,6 +130,7 @@ export async function exercisePromptEditor(
   const preview = await view("Save prompt changes?");
   assert.match(preview.message ?? "", /Editor verified/);
   preview.onConfirm?.();
+  api.ui.dialog.clear();
   await view("Prompt settings saved");
   assert.match(await readFile(settingsPath, "utf8"), /Editor verified/);
   current = undefined;

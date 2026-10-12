@@ -163,18 +163,22 @@ export function dialogNavigation(
     show(() => decorate(api.ui.DialogConfirm(props)));
   const prompt = (props: Parameters<TuiPluginApi["ui"]["DialogPrompt"]>[0]) => {
     let value = props.value;
-    show(() =>
-      decorate(
+    show(() => {
+      const check = checkpoint();
+      return decorate(
         api.ui.DialogPrompt({
           ...props,
           value,
           onConfirm: (text) => {
+            if (!check()) {
+              return;
+            }
             value = text;
             return props.onConfirm?.(text);
           },
         }),
-      ),
-    );
+      );
+    });
   };
   return {
     show,
