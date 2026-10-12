@@ -10,7 +10,7 @@ After your first manual npm release, configure [npm trusted publishing](https://
 - Environment: `npm`
 - Allow direct `npm publish`.
 
-Create the GitHub `npm` environment and choose its release protection rules. No npm token secret is needed. This PR does not create the environment, publisher grant, initial package or release.
+Create the GitHub `npm` environment and choose its release protection rules. No npm token secret is needed. Configure the environment and publisher grant separately; the workflow does not create them.
 
 For later versions, update the package and lockfile version together, merge to `main`, tag that commit `vX.Y.Z`, and publish a stable GitHub release. The workflow rejects prereleases, mismatched versions, wrong package/repository metadata, and commits outside `main`. npm versions are immutable: use a new version after the manually published first release.
 
