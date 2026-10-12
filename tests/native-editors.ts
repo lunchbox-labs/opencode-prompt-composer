@@ -134,6 +134,38 @@ export async function exercisePromptEditor(
   await view("Prompt settings saved");
   const saved = await readFile(settingsPath, "utf8");
   assert.match(saved, /Editor verified/);
+  const running = await request("/config");
+  commands.get("prompt-composer.compose")!();
+  await view("Compose prompts");
+  choose("saved-preview");
+  choose("saved-preview");
+  await view("Saved prompt changes — not applied");
+  choose("agent:review");
+  const savedPages = await view("Agent: review — not applied — pages");
+  const savedText: string[] = [];
+  const pages = savedPages.options!.filter(
+    (item) => item.value !== "\u0000back",
+  );
+  for (const [index, page] of pages.entries()) {
+    choose(page.value);
+    savedText.push(
+      (
+        await view(
+          `Agent: review — not applied — page ${index + 1}/${pages.length}`,
+        )
+      ).message!,
+    );
+    api.ui.dialog.clear();
+    await view("Agent: review — not applied — pages");
+  }
+  assert.match(savedText.join(""), /Editor verified/);
+  choose("\u0000back");
+  await view("Saved prompt changes — not applied");
+  choose("\u0000back");
+  await view("Compose prompts");
+  api.ui.dialog.clear();
+  assert.deepEqual(await request("/config"), running);
+  assert.equal(await readFile(settingsPath, "utf8"), saved);
   current = undefined;
   commands.get("prompt-composer.compose")!();
   await view("Compose prompts");

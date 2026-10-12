@@ -68,6 +68,8 @@ Preview offers an agent/command chooser, then numbered pages of the selected tex
 
 The editor checks the server filesystem and rejects stale settings or changed include dependencies. Edit snippet files through your normal editor; authored OpenCode files remain untouched. Composition uses OpenCode’s loaded agent and command bodies. After editing those native files externally, reload before previewing or saving prompt rules.
 
+Select **Preview saved prompt changes** to inspect saved Prompt settings and snippets before applying them. It uses the currently loaded native definitions and the complete selected-body viewer, with **not applied** labels on the result and its pages. It verifies source reads, inventory, server text and connection before showing the snapshot. Errors and composition notices do not apply changes, dispose the instance or write files. Native definition edits still require reload; editor and save freshness checks remain strict. This preview does not execute skills or show the full model request.
+
 ## Examples and checks
 
 - [Review guidance](docs/examples/review/README.md): one format shared by an agent and a native command.

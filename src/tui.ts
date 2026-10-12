@@ -11,6 +11,7 @@ import { previewPages } from "./preview.ts";
 import { fingerprint, readState } from "./runtime-state.ts";
 import { loadSettings } from "./settings.ts";
 import { projectDiscoveryEnabled } from "./discovery.ts";
+import { loadSavedPreview } from "./saved-preview.ts";
 
 const PromptComposerTui: TuiPlugin = (api) => {
   const navigation = dialogNavigation(api);
@@ -83,7 +84,8 @@ const PromptComposerTui: TuiPlugin = (api) => {
       );
     }
   };
-  const preview = (snapshot: Snapshot) => {
+  const preview = (snapshot: Snapshot, saved = false) => {
+    const label = saved ? " — not applied" : "";
     const entries = [
       ...Object.entries(snapshot.current.config.agent ?? {}).map(
         ([name, agent]) => {
@@ -150,7 +152,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
       });
     };
     menu(
-      "Effective prompts",
+      saved ? "Saved prompt changes — not applied" : "Effective prompts",
       entries.length > 0
         ? entries
         : [{ title: "No configured agent or command text", value: "empty" }],
@@ -161,7 +163,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
         }
         const pages = previewPages(entry.text);
         menu(
-          `${entry.title} — pages`,
+          `${entry.title}${label} — pages`,
           pages.map((_, index) => ({
             title: `Page ${index + 1} of ${pages.length}`,
             value: String(index),
@@ -169,7 +171,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
           (value) => {
             const index = Number(value);
             navigation.alert({
-              title: `${entry.title} — page ${index + 1}/${pages.length}`,
+              title: `${entry.title}${label} — page ${index + 1}/${pages.length}`,
               message: pages[index] === "" ? "(empty text)" : pages[index],
             });
           },
@@ -412,6 +414,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
         options: [
           { title: "Edit prompt settings…", value: "edit" },
           { title: "Preview effective prompts and notices", value: "preview" },
+          { title: "Preview saved prompt changes", value: "saved-preview" },
           { title: "Apply saved prompt settings", value: "apply" },
         ],
         onSelect: (selected) => {
@@ -426,7 +429,10 @@ const PromptComposerTui: TuiPlugin = (api) => {
             }
             let snapshot: Snapshot;
             try {
-              snapshot = await load();
+              snapshot =
+                selected.value === "saved-preview"
+                  ? await loadSavedPreview(api, root)
+                  : await load();
             } catch (error) {
               if (!check()) {
                 return;
@@ -443,6 +449,9 @@ const PromptComposerTui: TuiPlugin = (api) => {
                 break;
               case "preview":
                 preview(snapshot);
+                break;
+              case "saved-preview":
+                preview(snapshot, true);
                 break;
             }
           });
