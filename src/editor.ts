@@ -113,7 +113,7 @@ export async function planEdits(
     if (source === undefined || (source.mode & 0o222) === 0) {
       throw new SettingsError("Select a writable prompt settings source.");
     }
-    parseSettings(edit.text);
+    parseSettings(edit.text, edit.path);
   }
   await verifyInventory(settings);
   await verifyReads(settings.documents, settings.missing);
@@ -130,7 +130,7 @@ export async function planEdits(
 
 export async function savePlan(plan: EditPlan): Promise<void> {
   for (const edit of plan.edits) {
-    parseSettings(edit.text);
+    parseSettings(edit.text, edit.path);
   }
   const held: { path: string; close: () => Promise<void> }[] = [];
   const staged: { edit: Edit; temporary: string; original: SourceFile }[] = [];
