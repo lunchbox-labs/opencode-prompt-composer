@@ -445,7 +445,7 @@ test(
     assert.match(JSON.stringify(message), /Verified/);
     assert.ok(
       received.some((body) => body.includes("Skill Project evidence")),
-      logs,
+      `${logs}\nFixture model requests: ${JSON.stringify(received)}\nSession messages: ${JSON.stringify(await api(`/session/${session.id}/message`))}`,
     );
     await writeFile(
       join(project, ".opencode/prompts/review/nested.txt"),
