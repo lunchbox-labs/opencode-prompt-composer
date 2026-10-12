@@ -2,7 +2,7 @@ import { realpath, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { discoveryDirectories } from "./discovery.ts";
 import { SettingsError } from "./errors.ts";
-import { fingerprint, record } from "./runtime-state.ts";
+import { record } from "./runtime-state.ts";
 import type { SettingsContext } from "./settings.ts";
 
 async function roots(context: SettingsContext) {
@@ -21,7 +21,7 @@ async function roots(context: SettingsContext) {
   ];
 }
 
-async function identity(path: string): Promise<string> {
+async function identity(path: string) {
   const canonical = await realpath(path);
   const info = await stat(canonical, { bigint: true });
   if (!info.isDirectory() || info.ino === 0n || info.birthtimeNs === 0n) {
@@ -29,15 +29,21 @@ async function identity(path: string): Promise<string> {
       "Filesystem identity is unavailable. Reload on a supported local filesystem.",
     );
   }
-  return fingerprint(
-    [canonical, info.dev, info.ino, info.birthtimeNs].join("\n"),
-  );
+  return {
+    canonical,
+    device: String(info.dev),
+    inode: String(info.ino),
+    created: String(info.birthtimeNs),
+  };
 }
 
 /** Stable directory identities detect accidental client/server filesystem mismatches. */
 export async function captureFilesystem(context: SettingsContext) {
   const locations = await roots(context);
-  const anchors: { path: string; identity: string }[] = [];
+  const anchors: {
+    path: string;
+    identity: Awaited<ReturnType<typeof identity>>;
+  }[] = [];
   for (const location of locations) {
     let path = location;
     for (;;) {
@@ -83,8 +89,9 @@ export async function verifyFilesystem(
     if (
       !record(anchor) ||
       typeof anchor.path !== "string" ||
-      typeof anchor.identity !== "string" ||
-      (await identity(anchor.path)) !== anchor.identity
+      !record(anchor.identity) ||
+      JSON.stringify(await identity(anchor.path)) !==
+        JSON.stringify(anchor.identity)
     ) {
       throw mismatch();
     }
