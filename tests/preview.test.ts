@@ -376,9 +376,12 @@ test("saved preview composes changed settings and snippets without applying or w
     '{"agents":{"review":{"append":["Saved rule."]},"missing":{"append":["Notice"]}}}';
   await writeFile(settings, text);
   const writes: string[] = [];
-  const watcher = watch(h.root, (_event, filename) =>
-    writes.push(String(filename)),
-  );
+  const watcher = watch(h.root, (event, filename) => {
+    // Windows can report directory metadata changes after read-only access.
+    if (event === "rename") {
+      writes.push(String(filename));
+    }
+  });
   t.after(() => watcher.close());
   await h.open();
   h.choose("saved-preview");
