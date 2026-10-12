@@ -27,6 +27,7 @@ test(
     }[];
     assert.ok(files.some((file) => file.path === "dist/server.d.ts"));
     assert.ok(files.some((file) => file.path === "LICENSE"));
+    assert.ok(files.some((file) => file.path === "docs/discovery.md"));
     assert.ok(!files.some((file) => file.path.startsWith("tests/")));
     await execute(
       process.execPath,

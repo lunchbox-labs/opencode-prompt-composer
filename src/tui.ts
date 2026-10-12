@@ -32,7 +32,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
     const project = root();
     const client = await verifySharedFilesystem(
       api,
-      project,
+      api.state.path.directory,
       api.state.path.directory,
     );
     const response = await client.config.get({
@@ -44,12 +44,19 @@ const PromptComposerTui: TuiPlugin = (api) => {
     const state = readState(response.data, project);
     const settings = await loadSettings(state.context);
     const current = await compose(state.native, settings);
-    for (const file of [...settings.documents, ...current.reads]) {
-      if (state.inputs[file.path] !== fingerprint(file.text)) {
-        throw new SettingsError(
-          "Prompt files changed since the server loaded them. Apply saved settings, then reopen the editor.",
-        );
-      }
+    const inputs = Object.fromEntries(
+      [...settings.documents, ...current.reads].map((file) => [
+        file.path,
+        fingerprint(file.text),
+      ]),
+    );
+    if (
+      Object.keys(inputs).length !== Object.keys(state.inputs).length ||
+      Object.entries(inputs).some(([path, hash]) => state.inputs[path] !== hash)
+    ) {
+      throw new SettingsError(
+        "Prompt files changed since the server loaded them. Apply saved settings, then reopen the editor.",
+      );
     }
     return {
       settings,
@@ -92,7 +99,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
           assertCurrent(snapshot);
           await verifySharedFilesystem(
             api,
-            snapshot.project,
+            snapshot.directory,
             snapshot.directory,
           );
           assertCurrent(snapshot);

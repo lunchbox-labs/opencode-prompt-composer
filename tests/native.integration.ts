@@ -20,14 +20,18 @@ test(
   { timeout: 240_000 },
   async (t) => {
     const root = await mkdtemp(join(tmpdir(), "prompt-native-"));
-    t.after(() =>
-      rm(root, {
+    let stopHost = async () => {};
+    let closeModel = () => {};
+    t.after(async () => {
+      await stopHost();
+      closeModel();
+      await rm(root, {
         recursive: true,
         force: true,
         maxRetries: 5,
         retryDelay: 100,
-      }),
-    );
+      });
+    });
     const env: NodeJS.ProcessEnv = {};
     for (const [key, value] of Object.entries(process.env)) {
       if (
@@ -195,10 +199,10 @@ test(
     });
     modelServer.listen(0, "127.0.0.1");
     await once(modelServer, "listening");
-    t.after(() => {
+    closeModel = () => {
       modelServer.closeAllConnections();
       modelServer.close();
-    });
+    };
     const address = modelServer.address();
     assert.ok(address !== null && typeof address !== "string");
     const configPlugin = process.env.CONFIG_COMPOSER_DIR;
@@ -267,8 +271,13 @@ test(
     child.stderr.on("data", (chunk: Buffer) => {
       logs += chunk.toString();
     });
-    t.after(async () => {
-      if (child.pid !== undefined && child.exitCode === null) {
+    stopHost = async () => {
+      if (
+        child.pid !== undefined &&
+        child.exitCode === null &&
+        child.signalCode === null
+      ) {
+        const exited = once(child, "exit");
         if (process.platform === "win32") {
           await execute("taskkill", [
             "/pid",
@@ -283,9 +292,12 @@ test(
             /* Already stopped. */
           }
         }
-        await Promise.race([once(child, "exit"), setTimeout(5000)]);
+        await Promise.race([
+          exited,
+          setTimeout(5000, undefined, { ref: false }),
+        ]);
       }
-    });
+    };
     let url: string | undefined;
     for (let n = 0; n < 600; n++) {
       url = /https?:\/\/127\.0\.0\.1:\d+/.exec(output)?.[0];

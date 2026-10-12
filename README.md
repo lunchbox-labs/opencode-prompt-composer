@@ -48,7 +48,7 @@ Run `npm ci`, `npm run build`, and `npm pack`; install the tarball into a separa
 { "plugin": ["/absolute/path/to/installed/opencode-prompt-composer"] }
 ```
 
-`/compose-prompts` edits defaults or agent rules as JSON, previews effective prompts and notices, and saves JSONC without removing comments. `/prompt-reload` applies saved settings to the current instance when agents are idle. The editor checks the server filesystem and rejects stale settings or changed include dependencies. Edit snippet files through your normal editor; authored OpenCode files remain untouched.
+`/compose-prompts` edits defaults or agent rules as JSON, previews effective prompts and notices, and saves JSONC without removing comments. `/prompt-reload` applies saved settings to the current instance when agents are idle. The editor checks the server filesystem and rejects stale settings or changed include dependencies. Edit snippet files through your normal editor; authored OpenCode files remain untouched. Previews use OpenCode’s loaded agent and command bodies. After editing those native files externally, reload before previewing or saving prompt rules.
 
 ## Examples and checks
 

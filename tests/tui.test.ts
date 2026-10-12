@@ -21,6 +21,8 @@ interface View {
 test("TUI previews, saves JSONC, and applies rules through a matching server baseline", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "prompt-tui-"));
   t.after(() => rm(root, { recursive: true, force: true }));
+  const directory = join(root, "nested");
+  await mkdir(directory);
   await mkdir(join(root, ".opencode"));
   const path = join(root, ".opencode/prompt-composer.jsonc");
   await writeFile(path, '// Keep comment\n{"agents":{}}');
@@ -29,7 +31,7 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     agent: { review: { prompt: "Review" } },
   };
   const hooks = await server.server({
-    directory: root,
+    directory,
     worktree: root,
   } as PluginInput);
   let config = structuredClone(authored);
@@ -40,7 +42,7 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     current = view;
   };
   const api = {
-    state: { path: { directory: root, worktree: root } },
+    state: { path: { directory, worktree: root } },
     lifecycle: { signal: new AbortController().signal, onDispose() {} },
     route: { current: { name: "home" } },
     keymap: {
@@ -134,5 +136,10 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   assert.equal(config.agent!.review!.prompt, "Review");
   commands.get("prompt-composer.apply")!();
   await view("Prompt settings applied");
+  assert.equal(config.agent!.review!.prompt, "Review\n\nAfter");
+  await rm(path);
+  commands.get("prompt-composer.compose")!();
+  const stale = await view("Prompt Composer");
+  assert.match(stale.message ?? "", /Prompt files changed/);
   assert.equal(config.agent!.review!.prompt, "Review\n\nAfter");
 });
