@@ -205,7 +205,9 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   commands.get("prompt-composer.compose")!();
   await view("Compose prompts");
   choose("apply");
+  choose("apply");
   await view("Prompt settings applied");
+  assert.equal(disposalCount, 1);
   assert.equal(reloadReads, 3);
   assert.equal(config.agent!.review!.prompt, "Review\n\nAfter");
   // A connection change while reading the old baseline must not dispose it.

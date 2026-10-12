@@ -216,7 +216,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
       },
     });
   };
-  const apply = async () => {
+  const applySaved = async () => {
     const directory = api.state.path.directory;
     const client = api.client;
     const status = await client.session.status({ directory });
@@ -297,6 +297,18 @@ const PromptComposerTui: TuiPlugin = (api) => {
       message:
         "The current OpenCode instance has reloaded its prompt settings.",
     });
+  };
+  let applying = false;
+  const apply = async () => {
+    if (applying) {
+      return;
+    }
+    applying = true;
+    try {
+      await applySaved();
+    } finally {
+      applying = false;
+    }
   };
   const open = () => {
     navigation.menu(
