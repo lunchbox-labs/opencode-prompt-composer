@@ -38,7 +38,7 @@ Composition order is default prepends, agent prepends, authored body, default ap
 
 Prompt Composer mirrors the pinned host's **agent/command directory order**: global OpenCode config directory; project `.opencode` directories from the opened directory upward to the worktree; home `.opencode`; then `OPENCODE_CONFIG_DIR`. Later files with the same relative filename win. Settings use the same order. `OPENCODE_DISABLE_PROJECT_CONFIG` disables project discovery. There are no custom prompt directories or source aliases. [Exact discovery behavior](docs/discovery.md).
 
-OpenCode continues to own agents, commands, skills, models and permissions. Prompt Composer discovers only its own prompt files and settings. It works alone or with the config-only Config Composer from [PR #80](https://github.com/lunchbox-labs/opencode-config-composer/pull/80); configuration profile switches do not select prompt rules. Register Config Composer first so prompt operations see its final enabled agents. Editor coexistence requires the Config Composer follow-up that excludes downstream prompt text from its configuration freshness checks; merged #80 alone does not support both editors. [Migration notes](docs/migration.md).
+OpenCode continues to own agents, commands, skills, models and permissions. Prompt Composer discovers only its own prompt files and settings. It works alone or with the config-only Config Composer from [PR #80](https://github.com/lunchbox-labs/opencode-config-composer/pull/80); configuration profile switches do not select prompt rules. Register Config Composer first so prompt operations see its final enabled agents. Editor coexistence requires [Config Composer #82](https://github.com/lunchbox-labs/opencode-config-composer/pull/82), which excludes downstream prompt text from its configuration freshness checks; merged #80 alone does not support both editors. [Migration notes](docs/migration.md).
 
 ## Use a local build
 
@@ -56,3 +56,5 @@ Run `npm ci`, `npm run build`, and `npm pack`; install the tarball into a separa
 - [On-demand verification](docs/examples/skill-guidance/README.md): a skill includes a shared checklist when loaded.
 
 `npm run check`, `npm run test:package`, and `npm run test:native` cover source checks, packed installation, and real OpenCode behavior. Native tests use an isolated local model fixture and no provider account. CI runs on Linux and Windows, including both plugin orders with Config Composer #80. Nothing is published automatically.
+
+Maintainers: [release workflow setup](docs/publishing.md) covers the initial manual release and later npm trusted publishing.

@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { setTimeout } from "node:timers/promises";
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui";
 import { dialogNavigation } from "./navigation.ts";
 import { verifySharedFilesystem } from "./connection.ts";
@@ -197,19 +198,62 @@ const PromptComposerTui: TuiPlugin = (api) => {
     if (client !== api.client || directory !== api.state.path.directory) {
       throw new SettingsError("The current OpenCode instance changed.");
     }
+    const project = root();
+    const before = await client.config.get({ directory });
+    if (before.error !== undefined) {
+      throw new SettingsError("Could not read the current prompt runtime.");
+    }
+    const previous = readState(before.data, project);
     const disposed = await client.instance.dispose({ directory });
     if (disposed.error !== undefined || !disposed.data) {
       throw new SettingsError(
         "Could not apply settings. Saved files remain available for a restart.",
       );
     }
-    const refreshed = await client.config.get({ directory });
-    if (refreshed.error !== undefined) {
+    // OpenCode acknowledges disposal before teardown finishes. During that
+    // interval /config may expose old or partially reset data.
+    const deadline = Date.now() + 15_000;
+    let failure: unknown;
+    let fresh = false;
+    do {
+      if (
+        client !== api.client ||
+        directory !== api.state.path.directory ||
+        project !== root() ||
+        api.lifecycle.signal.aborted
+      ) {
+        throw new SettingsError("The current OpenCode instance changed.");
+      }
+      const refreshed = await client.config.get(
+        { directory },
+        {
+          signal: AbortSignal.any([
+            api.lifecycle.signal,
+            AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+          ]),
+        },
+      );
+      try {
+        if (refreshed.error !== undefined) {
+          throw new SettingsError(
+            "The instance could not reload. Inspect the server log.",
+          );
+        }
+        const current = readState(refreshed.data, project);
+        if (current.id !== previous.id) {
+          fresh = true;
+          break;
+        }
+      } catch (error) {
+        failure = error;
+      }
+      await setTimeout(50, undefined, { signal: api.lifecycle.signal });
+    } while (Date.now() < deadline);
+    if (!fresh) {
       throw new SettingsError(
-        "The instance could not reload. Inspect the server log.",
+        `The instance did not confirm a fresh prompt runtime. Saved files remain available for a restart.${failure instanceof Error ? ` ${failure.message}` : ""}`,
       );
     }
-    readState(refreshed.data, root());
     navigation.alert({
       title: "Prompt settings applied",
       message:

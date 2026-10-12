@@ -45,10 +45,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts tests/*.test.mjs",
     "lint": "eslint . --max-warnings 0",
-    "format": "prettier --write src tests package.json tsconfig*.json *.config.mjs schema.json",
-    "format:check": "prettier --check src tests package.json tsconfig*.json *.config.mjs schema.json",
+    "format": "prettier --write src tests scripts package.json tsconfig*.json *.config.mjs schema.json",
+    "format:check": "prettier --check src tests scripts package.json tsconfig*.json *.config.mjs schema.json",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
     "prepack": "npm run build",
     "test:package": "npm run build && node --experimental-strip-types --test tests/package.integration.ts",
@@ -80,5 +80,9 @@
     "@opentui/solid": {
       "@babel/core": "7.29.7"
     }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   }
 }

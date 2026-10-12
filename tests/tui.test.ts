@@ -36,6 +36,8 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   } as PluginInput);
   let config = structuredClone(authored);
   await hooks.config!(config);
+  let pendingReload = false;
+  let reloadReads = 0;
   const commands = new Map<string, () => void>();
   let current: View | undefined;
   const render = (view: View) => {
@@ -69,6 +71,18 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
       },
       config: {
         async get() {
+          if (pendingReload) {
+            reloadReads++;
+            if (reloadReads === 1) {
+              return { data: structuredClone(config) };
+            }
+            if (reloadReads === 2) {
+              return { data: structuredClone(authored) };
+            }
+            config = structuredClone(authored);
+            await hooks.config!(config);
+            pendingReload = false;
+          }
           return { data: structuredClone(config) };
         },
       },
@@ -79,8 +93,7 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
       },
       instance: {
         async dispose() {
-          config = structuredClone(authored);
-          await hooks.config!(config);
+          pendingReload = true;
           return { data: true };
         },
       },
@@ -136,6 +149,7 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   assert.equal(config.agent!.review!.prompt, "Review");
   commands.get("prompt-composer.apply")!();
   await view("Prompt settings applied");
+  assert.equal(reloadReads, 3);
   assert.equal(config.agent!.review!.prompt, "Review\n\nAfter");
   await rm(path);
   commands.get("prompt-composer.compose")!();

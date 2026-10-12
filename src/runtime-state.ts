@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Config } from "@opencode-ai/plugin";
 import {
   type SettingsContext,
@@ -61,6 +61,7 @@ export function publishState(
       ...(Array.isArray(entry) ? entry[1] : {}),
       [key]: {
         version: 1,
+        id: randomUUID(),
         context: {
           ...context,
           directory: context.directory ?? context.root,
@@ -116,6 +117,7 @@ export function readState(
   config: unknown,
   root: string,
 ): {
+  id: string;
   native: Config;
   context: SettingsContext;
   inputs: Record<string, string>;
@@ -135,6 +137,7 @@ export function readState(
     markers.length !== 1 ||
     !record(marker) ||
     marker.version !== 1 ||
+    typeof marker.id !== "string" ||
     !record(marker.context) ||
     marker.context.root !== root ||
     typeof marker.context.directory !== "string" ||
@@ -162,6 +165,7 @@ export function readState(
     Object.defineProperty(inputs, path, { value: hash, enumerable: true });
   }
   return {
+    id: marker.id,
     native: parseBodies(marker.native),
     context: {
       root,
