@@ -62,7 +62,9 @@ Run `npm ci`, `npm run build`, and `npm pack`; install the tarball into a separa
 
 ## Edit prompt settings
 
-`/compose-prompts` edits defaults or agent rules as JSON, previews effective agent prompts and notices, and saves JSONC without removing comments. Select **Apply saved prompt settings** from its main menu when agents are idle. This action remains available after files change. If no settings source exists, the edit menu can create project settings when project discovery is enabled.
+`/compose-prompts` edits defaults or agent rules as JSON, previews complete composed agent prompts, command templates and notices, and saves JSONC without removing comments. Select **Apply saved prompt settings** from its main menu when agents are idle. This action remains available after files change. If no settings source exists, the edit menu can create project settings when project discovery is enabled.
+
+Preview offers an agent/command chooser, then numbered pages of the selected text. Use Escape or OK to return to the page list, and Back or Escape to return to the chooser. Disabled agents and native fallbacks are labeled. Command placeholders stay literal; Preview does not invoke commands or show the full model request.
 
 The editor checks the server filesystem and rejects stale settings or changed include dependencies. Edit snippet files through your normal editor; authored OpenCode files remain untouched. Composition uses OpenCode’s loaded agent and command bodies. After editing those native files externally, reload before previewing or saving prompt rules.
 
