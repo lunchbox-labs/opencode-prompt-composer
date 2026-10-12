@@ -1,7 +1,7 @@
 import type { Config } from "@opencode-ai/plugin";
 import { type PromptDependency, expandIncludes } from "./includes.ts";
 import type { LoadedSettings, SourceFile } from "./settings.ts";
-import { SettingsError } from "./errors.ts";
+import { SettingsError, diagnosticName } from "./errors.ts";
 
 export interface Diagnostic {
   kind: "agent" | "prompt";
@@ -30,14 +30,41 @@ export async function compose(
       mode: file.mode,
     });
   };
-  const expand = (text: string) =>
-    expandIncludes(text, settings.inventory.files, recordRead, overlays);
-  for (const policy of [
-    settings.effective.defaults ?? {},
-    ...Object.values(settings.effective.agents ?? {}),
-  ]) {
-    for (const text of [...(policy.prepend ?? []), ...(policy.append ?? [])]) {
-      await expand(text);
+  const expand = (text: string, consumer: string) =>
+    expandIncludes(
+      text,
+      settings.inventory.files,
+      recordRead,
+      overlays,
+      consumer,
+    );
+  const policies = [
+    { name: undefined, policy: settings.effective.defaults ?? {} },
+    ...Object.entries(settings.effective.agents ?? {}).map(
+      ([name, policy]) => ({ name, policy }),
+    ),
+  ];
+  for (const { name, policy } of policies) {
+    for (const operation of ["prepend", "append"] as const) {
+      const owner = settings.documents.findLast((document) => {
+        const value =
+          name === undefined
+            ? document.value.defaults
+            : Object.hasOwn(document.value.agents ?? {}, name)
+              ? document.value.agents?.[name]
+              : undefined;
+        return value?.[operation] !== undefined;
+      });
+      const pointer =
+        name === undefined
+          ? "/defaults"
+          : `/agents/${name.replaceAll("~", "~0").replaceAll("/", "~1")}`;
+      for (const [index, text] of (policy[operation] ?? []).entries()) {
+        await expand(
+          text,
+          `settings${owner === undefined ? "" : ` ${diagnosticName(owner.path)}`} ${diagnosticName(`${pointer}/${operation}/${index}`)}`,
+        );
+      }
     }
   }
   for (const name of Object.keys(settings.effective.agents ?? {})) {
@@ -75,14 +102,20 @@ export async function compose(
       agent.prompt,
       ...operations.flatMap((item) => item.append ?? []),
     ];
-    agent.prompt = await expand(parts.join("\n\n"));
+    agent.prompt = await expand(
+      parts.join("\n\n"),
+      `agent ${diagnosticName(name)}`,
+    );
   }
-  for (const command of Object.values(result.command ?? {})) {
+  for (const [name, command] of Object.entries(result.command ?? {})) {
     if (typeof command.template !== "string") {
       throw new SettingsError("Native commands must contain valid templates.");
     }
     if (command.template.includes("{{include:")) {
-      command.template = await expand(command.template);
+      command.template = await expand(
+        command.template,
+        `command ${diagnosticName(name)}`,
+      );
     }
   }
   return { config: result, diagnostics, reads };

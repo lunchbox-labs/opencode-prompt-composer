@@ -118,6 +118,9 @@ const PromptComposer: Plugin = (input, options = {}) => {
         output.output = await expandIncludes(
           output.output,
           settings.inventory.files,
+          undefined,
+          undefined,
+          "skill output (source file unavailable)",
         );
       }
     },

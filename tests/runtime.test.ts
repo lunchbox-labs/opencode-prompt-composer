@@ -128,3 +128,72 @@ test("skills expand on demand and reject truncated bodies without touching unrel
     /truncated/,
   );
 });
+
+test("include failures identify consumers and logical cycles without native paths or prompt bodies", async (t) => {
+  const { root, context } = await fixture(t, {});
+  await writeFile(
+    join(root, ".opencode/prompts/a.md"),
+    "SECRET A {{include:b.md}}",
+  );
+  await writeFile(
+    join(root, ".opencode/prompts/b.md"),
+    "SECRET B {{include:a.md}}",
+  );
+  const settings = await loadSettings(context);
+  for (const [native, consumer] of [
+    [
+      { agent: { review: { prompt: "SECRET {{include:a.md}}" } } },
+      'agent "review"',
+    ],
+    [
+      { command: { check: { template: "SECRET {{include:a.md}}" } } },
+      'command "check"',
+    ],
+  ] as const) {
+    await assert.rejects(compose(native, settings), (error: Error) => {
+      assert.match(error.message, /cycle/);
+      assert.ok(error.message.includes(consumer));
+      assert.match(error.message, /a\.md.* -> .*b\.md.* -> .*a\.md/);
+      assert.doesNotMatch(error.message, /SECRET|agents\/|commands\//);
+      return true;
+    });
+  }
+});
+
+test("inactive settings fragments and skill output have honest consumer context", async (t) => {
+  const { root, context } = await fixture(t, {
+    agents: { absent: { append: ["{{include:missing.md}}"] } },
+  });
+  await assert.rejects(
+    compose({}, await loadSettings(context)),
+    (error: Error) => {
+      assert.ok(
+        error.message.includes(
+          JSON.stringify(join(root, ".opencode/prompt-composer.jsonc")),
+        ),
+      );
+      assert.match(error.message, /\/agents\/absent\/append\/0/);
+      assert.match(error.message, /does not exist/);
+      return true;
+    },
+  );
+  const hooks = await server.server({
+    directory: root,
+    worktree: root,
+  } as PluginInput);
+  await assert.rejects(
+    hooks["tool.execute.after"]!(
+      { tool: "skill", sessionID: "s", callID: "c", args: { name: "review" } },
+      {
+        title: "skill",
+        output: "PRIVATE {{include:missing.md}}",
+        metadata: {},
+      },
+    ),
+    (error: Error) => {
+      assert.match(error.message, /skill output.*source file unavailable/);
+      assert.doesNotMatch(error.message, /PRIVATE|SKILL\.md/);
+      return true;
+    },
+  );
+});
