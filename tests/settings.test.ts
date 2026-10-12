@@ -158,3 +158,29 @@ test("schema pointers preserve escaped and numeric keys and locate the failing a
     },
   );
 });
+
+test("on-disk source validation keeps the failing settings pathname", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "prompt-invalid-source-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, ".opencode"));
+  const path = join(root, ".opencode/prompt-composer.jsonc");
+  const env = {
+    OPENCODE_TEST_HOME: root,
+    XDG_CONFIG_HOME: join(root, "config"),
+  };
+  for (const [text, reason] of [
+    ["PRIVATE\0BODY", /NUL bytes/],
+    ["x".repeat(1024 * 1024 + 1), /size limit/],
+  ] as const) {
+    await writeFile(path, text);
+    await assert.rejects(
+      loadSettings({ root }, new Map(), env),
+      (error: Error) => {
+        assert.match(error.message, reason);
+        assert.ok(error.message.includes(JSON.stringify(path)));
+        assert.doesNotMatch(error.message, /PRIVATE|BODY/);
+        return true;
+      },
+    );
+  }
+});
