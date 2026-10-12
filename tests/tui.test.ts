@@ -43,8 +43,13 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   const commands = new Map<string, () => void>();
   const slashNames: string[] = [];
   let current: View | undefined;
+  let closed: (() => void) | undefined;
+  const alerts: string[] = [];
   const render = (view: View) => {
     current = view;
+    if (view.title === "Prompt Composer") {
+      alerts.push(view.message ?? "");
+    }
   };
   const api = {
     state: { path: { directory, worktree: root } },
@@ -117,10 +122,14 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
       DialogConfirm: render,
       DialogPrompt: render,
       dialog: {
-        replace(next: () => void) {
+        replace(next: () => void, onClose?: () => void) {
+          closed?.();
+          closed = onClose;
           next();
         },
         clear() {
+          closed?.();
+          closed = undefined;
           current = undefined;
         },
         get open() {
@@ -153,11 +162,42 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   (await view("Agent fragments and default inheritance")).onConfirm?.(
     '{"review":{"append":["After"]}}',
   );
-  const preview = await view("Save prompt changes?");
+  let preview = await view("Save prompt changes?");
   assert.match(preview.message ?? "", /Review\n\nAfter/);
   assert.doesNotMatch(await readFile(path, "utf8"), /After/);
+  api.ui.dialog.clear();
   preview.onConfirm?.();
+  const input = await view("Agent fragments and default inheritance");
+  assert.doesNotMatch(await readFile(path, "utf8"), /After/);
+  input.onConfirm?.('{"review":{"append":["After"]}}');
+  preview = await view("Save prompt changes?");
+  changeDuring = "baseline";
+  preview.onConfirm?.();
+  api.ui.dialog.clear();
+  assert.match(
+    (await view("Prompt Composer")).message ?? "",
+    /connection or project changed/,
+  );
+  assert.doesNotMatch(await readFile(path, "utf8"), /After/);
+  changeDuring = undefined;
+  Object.assign(api.state.path, { directory });
+  alerts.length = 0;
+  commands.get("prompt-composer.compose")!();
+  await view("Compose prompts");
+  choose("edit");
+  await view("Prompt settings source");
+  choose(path);
+  await view("Edit prompt settings");
+  choose("agents");
+  (await view("Agent fragments and default inheritance")).onConfirm?.(
+    '{"review":{"append":["After"]}}',
+  );
+  preview = await view("Save prompt changes?");
+  preview.onConfirm?.();
+  preview.onConfirm?.();
+  api.ui.dialog.clear();
   await view("Prompt settings saved");
+  assert.deepEqual(alerts, []);
   assert.match(await readFile(path, "utf8"), /^\/\/ Keep comment/);
   assert.match(await readFile(path, "utf8"), /After/);
   assert.equal(config.agent!.review!.prompt, "Review");
@@ -250,4 +290,11 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     ),
     true,
   );
+  choose("create");
+  queueMicrotask(() => Object.assign(api.state.path, { directory: root }));
+  assert.match(
+    (await view("Prompt Composer")).message ?? "",
+    /connection or project changed/,
+  );
+  await assert.rejects(readFile(path), { code: "ENOENT" });
 });
