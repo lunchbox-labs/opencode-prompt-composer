@@ -48,7 +48,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: lunchbox-labs/opencode-config-composer
-          ref: ab213bd9bcb8706fc7f0e2d7a04a2ffd8428ed0d
+          ref: dc80b31e3178b340245efa26dabd3c42d963a031
           path: compatibility/config-composer
           persist-credentials: false
       - name: Build config-only package

@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout } from "node:timers/promises";
@@ -20,7 +27,9 @@ test(
   "installed native hooks preserve authored files, reload, discover overrides and compose on-demand skills",
   { timeout: 240_000 },
   async (t) => {
-    const root = await mkdtemp(join(tmpdir(), "prompt-native-"));
+    const root = await realpath(
+      await mkdtemp(join(tmpdir(), "prompt-native-")),
+    );
     let stopHost = async () => {};
     let closeModel = () => {};
     t.after(async () => {
