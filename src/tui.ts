@@ -199,7 +199,18 @@ const PromptComposerTui: TuiPlugin = (api) => {
       throw new SettingsError("The current OpenCode instance changed.");
     }
     const project = root();
+    const assertCurrent = () => {
+      if (
+        client !== api.client ||
+        directory !== api.state.path.directory ||
+        project !== root() ||
+        api.lifecycle.signal.aborted
+      ) {
+        throw new SettingsError("The current OpenCode instance changed.");
+      }
+    };
     const before = await client.config.get({ directory });
+    assertCurrent();
     if (before.error !== undefined) {
       throw new SettingsError("Could not read the current prompt runtime.");
     }
@@ -216,14 +227,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
     let failure: unknown;
     let fresh = false;
     do {
-      if (
-        client !== api.client ||
-        directory !== api.state.path.directory ||
-        project !== root() ||
-        api.lifecycle.signal.aborted
-      ) {
-        throw new SettingsError("The current OpenCode instance changed.");
-      }
+      assertCurrent();
       const refreshed = await client.config.get(
         { directory },
         {
@@ -233,6 +237,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
           ]),
         },
       );
+      assertCurrent();
       try {
         if (refreshed.error !== undefined) {
           throw new SettingsError(

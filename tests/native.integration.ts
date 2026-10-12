@@ -385,6 +385,24 @@ test(
       >;
       command: Record<string, { template: string; subtask: boolean }>;
     };
+    async function reload(): Promise<typeof config> {
+      const previous = readState(await api("/config"), project);
+      await api("/instance/dispose", {});
+      // The host acknowledges dispose before teardown completes. Fixture-driven
+      // reloads must observe a new attested hook pass before using the instance.
+      for (let attempt = 0; attempt < 300; attempt++) {
+        const current = (await api("/config")) as typeof config;
+        try {
+          if (readState(current, project).id !== previous.id) {
+            return current;
+          }
+        } catch {
+          // Old or partially reset config is not evidence of a completed reload.
+        }
+        await setTimeout(50);
+      }
+      throw new Error(`No fresh prompt runtime after disposal.\n${logs}`);
+    }
     assert.equal(
       config.agent.review.prompt,
       "Use evidence.\n\nReview Project evidence\n\nState uncertainty.",
@@ -417,7 +435,7 @@ test(
       },
     );
     await writeFile(settingsPath, settingsText);
-    await api("/instance/dispose", {});
+    await reload();
     const session = (await api("/session", {})) as { id: string };
     const message = await api(`/session/${session.id}/message`, {
       agent: "review",
@@ -433,8 +451,7 @@ test(
       join(project, ".opencode/prompts/review/nested.txt"),
       "updated",
     );
-    await api("/instance/dispose", {});
-    const reloaded = (await api("/config")) as typeof config;
+    const reloaded = await reload();
     assert.equal(
       reloaded.agent.review.prompt,
       "Use evidence.\n\nReview Project updated\n\nState uncertainty.",
@@ -450,8 +467,7 @@ test(
       };
       profile.activeProfiles = [];
       await writeFile(profilePath, JSON.stringify(profile));
-      await api("/instance/dispose", {});
-      const cleared = (await api("/config")) as typeof config;
+      const cleared = await reload();
       assert.equal(cleared.agent.review.prompt, reloaded.agent.review.prompt);
       assert.equal(
         cleared.command.check.template,
@@ -479,8 +495,7 @@ test(
         "---\ndescription: Review changes\nmode: primary\n---\nReview",
       );
       await writeFile(settingsPath, "{}");
-      await api("/instance/dispose", {});
-      const commandOnly = (await api("/config")) as typeof config;
+      const commandOnly = await reload();
       assert.equal(commandOnly.agent.review.prompt, "Review");
       assert.equal(
         commandOnly.command.check.template,

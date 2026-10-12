@@ -37,6 +37,8 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   let config = structuredClone(authored);
   await hooks.config!(config);
   let pendingReload = false;
+  let disposalCount = 0;
+  let changeDuring: "baseline" | "refresh" | undefined;
   let reloadReads = 0;
   const commands = new Map<string, () => void>();
   let current: View | undefined;
@@ -71,6 +73,9 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
       },
       config: {
         async get() {
+          if (changeDuring === "baseline") {
+            Object.assign(api.state.path, { directory: root });
+          }
           if (pendingReload) {
             reloadReads++;
             if (reloadReads === 1) {
@@ -82,6 +87,9 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
             config = structuredClone(authored);
             await hooks.config!(config);
             pendingReload = false;
+            if (changeDuring === "refresh") {
+              Object.assign(api.state.path, { directory: root });
+            }
           }
           return { data: structuredClone(config) };
         },
@@ -93,6 +101,7 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
       },
       instance: {
         async dispose() {
+          disposalCount++;
           pendingReload = true;
           return { data: true };
         },
@@ -151,6 +160,28 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   await view("Prompt settings applied");
   assert.equal(reloadReads, 3);
   assert.equal(config.agent!.review!.prompt, "Review\n\nAfter");
+  // A connection change while reading the old baseline must not dispose it.
+  changeDuring = "baseline";
+  commands.get("prompt-composer.apply")!();
+  assert.match(
+    (await view("Prompt Composer")).message ?? "",
+    /instance changed/,
+  );
+  assert.equal(disposalCount, 1);
+  Object.assign(api.state.path, { directory });
+  current = undefined;
+
+  // A connection change while receiving the new baseline must not report success.
+  changeDuring = "refresh";
+  commands.get("prompt-composer.apply")!();
+  assert.match(
+    (await view("Prompt Composer")).message ?? "",
+    /instance changed/,
+  );
+  assert.equal(disposalCount, 2);
+  Object.assign(api.state.path, { directory });
+  changeDuring = undefined;
+  current = undefined;
   await rm(path);
   commands.get("prompt-composer.compose")!();
   const stale = await view("Prompt Composer");
