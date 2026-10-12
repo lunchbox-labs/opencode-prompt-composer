@@ -215,6 +215,9 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     Object.assign(api.state.path, { directory });
     Reflect.set(api, "client", client);
     api.ui.dialog.clear();
+    commands.get("prompt-composer.compose")!();
+    await view("Compose prompts");
+    choose("files");
     await view("Prompt files");
     alerts.length = 0;
   }
