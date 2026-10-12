@@ -141,8 +141,35 @@ export async function exercisePromptEditor(
   await view("Prompt settings applied");
   const config = (await request("/config")) as {
     agent: Record<string, { prompt?: string }>;
+    command: Record<string, { template: string }>;
   };
   assert.match(config.agent.review.prompt ?? "", /Editor verified/);
+  commands.get("prompt-composer.compose")!();
+  await view("Compose prompts");
+  choose("preview");
+  await view("Effective prompts");
+  for (const [value, title, expected] of [
+    ["agent:review", "Agent: review", config.agent.review.prompt],
+    ["command:check", "Command: check", config.command.check.template],
+  ]) {
+    choose(value!);
+    const menu = await view(`${title} — pages`);
+    const pages = menu.options!.filter((item) => item.value !== "\u0000back");
+    const text: string[] = [];
+    for (const [index, page] of pages.entries()) {
+      choose(page.value);
+      text.push(
+        (await view(`${title} — page ${index + 1}/${pages.length}`)).message!,
+      );
+      api.ui.dialog.clear();
+      await view(`${title} — pages`);
+    }
+    assert.equal(text.join(""), expected);
+    choose("\u0000back");
+    await view("Effective prompts");
+  }
+  choose("\u0000back");
+  await view("Compose prompts");
   assert.equal(await readFile(settingsPath, "utf8"), saved);
 }
 
