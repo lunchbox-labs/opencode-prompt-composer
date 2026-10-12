@@ -32,7 +32,7 @@ Optional `prompt-composer.jsonc` lives beside `prompts/`. It has only defaults a
 }
 ```
 
-Composition order is default prepends, agent prepends, authored body, default appends, agent appends. Set `inheritDefaults: false` to omit both default lists. Lists retain their order. Later settings replace earlier values field by field, including whole arrays; an empty array clears that list. Native agents without an authored prompt retain OpenCode's built-in fallback rather than having it replaced with fragments. Missing or disabled agent targets produce a notice; malformed settings and unsafe or missing includes fail composition.
+Composition order is default prepends, agent prepends, authored body, default appends, agent appends. Set `inheritDefaults: false` to omit both default lists. Lists retain their order. Later settings replace earlier values field by field, including whole arrays; an empty array clears that list. Native agents without an authored prompt retain OpenCode's built-in fallback rather than having it replaced with fragments. Explicitly named, enabled agents also produce a notice when nonblank effective additions are skipped for that fallback; empty additions and inheritance opt-outs with no remaining additions stay quiet. Missing or disabled agent targets produce a notice; malformed settings and unsafe or missing includes fail composition.
 
 ## Discovery and overrides
 
