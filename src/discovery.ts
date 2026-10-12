@@ -23,6 +23,8 @@ export interface DiscoveredPrompt {
 export interface PromptInventory {
   directories: string[];
   files: Map<string, DiscoveredPrompt>;
+  /** Candidate paths in discovery order; the final path wins. */
+  candidates: Map<string, string[]>;
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -103,6 +105,7 @@ export async function discoverPrompts(
 ): Promise<PromptInventory> {
   const directories = await discoveryDirectories(context, environment);
   const files = new Map<string, DiscoveredPrompt>();
+  const candidates = new Map<string, string[]>();
   let entries = 0;
   for (const directory of directories) {
     const root = join(directory, "prompts");
@@ -158,11 +161,14 @@ export async function discoverPrompts(
           [".md", ".txt"].includes(extname(entry.name).toLowerCase())
         ) {
           const name = relative(root, child).split(sep).join("/");
+          const paths = candidates.get(name) ?? [];
+          paths.push(child);
+          candidates.set(name, paths);
           files.set(name, { path: child, root, relativePath: name });
         }
       }
     }
     await scan(root, new Set());
   }
-  return { directories, files };
+  return { directories, files, candidates };
 }
