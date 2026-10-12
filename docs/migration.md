@@ -2,7 +2,7 @@
 
 Adopt Prompt Composer with the config-only Config Composer from [PR #80](https://github.com/lunchbox-labs/opencode-config-composer/pull/80). Do not register it beside older versions that still expand prompts: two expanders can duplicate fragments and consume escaped markers twice.
 
-Register Prompt Composer **before** Config Composer for editor coexistence with #80. Runtime composition is tested in either order, but Config Composer's editor rejects a baseline changed by a later plugin. This package does not modify the other plugin's private runtime metadata.
+Register Config Composer **before** Prompt Composer so prompt operations see its final agent availability. Do not reverse that order: agents enabled later by Config Composer would miss composition, and its availability changes invalidate Prompt Composer's editor baseline. Editor coexistence also requires the Config Composer follow-up that excludes downstream prompt/template text from its configuration freshness checks; merged #80 alone does not support both editors. This package does not modify the other plugin's private runtime metadata.
 
 Move reusable text into conventional `prompts/` directories. Change `{{include:@team/review.md}}` to `{{include:review.md}}` after placing that file under a discovered `prompts/` root. Remove configurable `sourceDirectories` and explicit prompt component mappings; later roots resolve duplicate relative filenames automatically.
 

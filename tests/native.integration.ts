@@ -15,7 +15,10 @@ import { join, resolve } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { test } from "node:test";
 import { promisify } from "node:util";
-import { pathToFileURL } from "node:url";
+import {
+  exerciseConfigEditor,
+  exercisePromptEditor,
+} from "./native-editors.ts";
 import { readState } from "../src/runtime-state.ts";
 
 const execute = promisify(execFile);
@@ -160,6 +163,10 @@ test(
     const agentText =
       "---\ndescription: Review changes\nmode: primary\n---\nReview {{include:review/body.md}}";
     await writeFile(agentPath, agentText);
+    const helperPath = join(project, ".opencode/agents/helper.md");
+    const helperText =
+      "---\ndescription: Optional helper\nmode: subagent\ndisable: true\n---\nHelp {{include:review/body.md}}";
+    await writeFile(helperPath, helperText);
     await writeFile(
       join(project, ".opencode/commands/check.md"),
       "---\ndescription: Native command\nagent: review\nsubtask: true\n---\nCheck {{include:review/body.md}} $ARGUMENTS \\{{include:literal.md}}",
@@ -171,7 +178,10 @@ test(
     const settingsPath = join(project, ".opencode/prompt-composer.jsonc");
     const settingsText = JSON.stringify({
       defaults: { append: ["State uncertainty."] },
-      agents: { review: { prepend: ["Use evidence."] } },
+      agents: {
+        review: { prepend: ["Use evidence."] },
+        helper: { append: ["Helper rule."] },
+      },
     });
     await writeFile(settingsPath, settingsText);
     const received: string[] = [];
@@ -222,11 +232,7 @@ test(
     assert.ok(address !== null && typeof address !== "string");
     const configPlugin = process.env.CONFIG_COMPOSER_DIR;
     const plugins =
-      configPlugin === undefined
-        ? [plugin]
-        : process.env.CONFIG_COMPOSER_ORDER === "prompt-first"
-          ? [plugin, configPlugin]
-          : [configPlugin, plugin];
+      configPlugin === undefined ? [plugin] : [configPlugin, plugin];
     await writeFile(
       join(shared, "opencode.jsonc"),
       JSON.stringify({
@@ -257,7 +263,12 @@ test(
         join(project, ".opencode/config-composer.jsonc"),
         JSON.stringify({
           componentGroups: { review: { agents: ["review"] } },
-          profiles: { work: { layers: [{ componentGroup: "review" }] } },
+          profiles: {
+            work: {
+              layers: [{ componentGroup: "review" }],
+              agentAvailability: { helper: true },
+            },
+          },
           activeProfiles: ["work"],
           defaults: {
             agents: {
@@ -266,6 +277,29 @@ test(
             },
           },
         }),
+      );
+    }
+    // Match the native test harness: preinstall the genuine pinned SDK in each
+    // config directory, avoiding platform-dependent cold dependency bootstrap.
+    for (const directory of [shared, join(project, ".opencode")]) {
+      await writeFile(
+        join(directory, "package.json"),
+        JSON.stringify({ private: true, type: "module" }),
+      );
+      await execute(
+        process.execPath,
+        [
+          npm,
+          "install",
+          "--prefix",
+          directory,
+          "--ignore-scripts",
+          "--no-audit",
+          "--no-fund",
+          "--save-exact",
+          `@opencode-ai/plugin@${version}`,
+        ],
+        { cwd: directory, timeout: 120_000, signal: t.signal },
       );
     }
     t.signal.throwIfAborted();
@@ -345,7 +379,10 @@ test(
       return response.json();
     }
     const config = (await api("/config")) as {
-      agent: Record<string, { prompt: string; model?: string }>;
+      agent: Record<
+        string,
+        { prompt: string; model?: string; disable?: boolean }
+      >;
       command: Record<string, { template: string; subtask: boolean }>;
     };
     assert.equal(
@@ -365,28 +402,16 @@ test(
     );
     if (configPlugin !== undefined) {
       assert.equal(config.agent.review.model, "fixture/model", logs);
-      if (process.env.CONFIG_COMPOSER_ORDER === "prompt-first") {
-        const module = (await import(
-          pathToFileURL(
-            join(
-              configPlugin,
-              "dist/config-composer/composition/runtime-baseline.js",
-            ),
-          ).href
-        )) as {
-          readRuntimeBaseline: (
-            config: unknown,
-            location: { root: string; directory: string },
-          ) => unknown;
-        };
-        assert.doesNotThrow(() =>
-          module.readRuntimeBaseline(config, {
-            root: project,
-            directory: project,
-          }),
-        );
-      }
+      assert.equal(config.agent.helper.disable, false);
+      assert.equal(
+        config.agent.helper.prompt,
+        "Help Project evidence\n\nState uncertainty.\n\nHelper rule.",
+      );
+      await exerciseConfigEditor(configPlugin, shared, api);
     }
+    await exercisePromptEditor(plugin, api, settingsPath);
+    await writeFile(settingsPath, settingsText);
+    await api("/instance/dispose", {});
     const session = (await api("/session", {})) as { id: string };
     const message = await api(`/session/${session.id}/message`, {
       agent: "review",
@@ -427,7 +452,39 @@ test(
         reloaded.command.check.template,
       );
       assert.doesNotThrow(() => readState(cleared, project));
+      assert.equal(cleared.agent.helper.disable, true);
+      assert.equal(
+        cleared.agent.helper.prompt,
+        "Help {{include:review/body.md}}",
+      );
+      await exerciseConfigEditor(configPlugin, shared, api);
+      await exercisePromptEditor(plugin, api, settingsPath);
+      await writeFile(settingsPath, settingsText);
+
+      // Command-only downstream composition must also allow Config Composer's editor.
+      await writeFile(
+        agentPath,
+        "---\ndescription: Review changes\nmode: primary\n---\nReview",
+      );
+      await writeFile(settingsPath, "{}");
+      await api("/instance/dispose", {});
+      const commandOnly = (await api("/config")) as typeof config;
+      assert.equal(commandOnly.agent.review.prompt, "Review");
+      assert.equal(
+        commandOnly.command.check.template,
+        "Check Project updated $ARGUMENTS {{include:literal.md}}",
+      );
+      await exerciseConfigEditor(configPlugin, shared, api);
+      await writeFile(agentPath, agentText);
+      await writeFile(settingsPath, settingsText);
+    } else {
+      assert.equal(config.agent.helper.disable, true);
+      assert.equal(
+        config.agent.helper.prompt,
+        "Help {{include:review/body.md}}",
+      );
     }
+    assert.equal(await readFile(helperPath, "utf8"), helperText);
     assert.equal(await readFile(agentPath, "utf8"), agentText);
     assert.equal(await readFile(settingsPath, "utf8"), settingsText);
   },
