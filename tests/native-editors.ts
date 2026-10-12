@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import type {
@@ -146,6 +146,10 @@ export async function exercisePromptEditor(
   const saved = await readFile(settingsPath, "utf8");
   assert.match(saved, /Editor verified/);
   const running = await request("/config");
+  const snippetPath = join(dirname(settingsPath), "prompts/review/body.md");
+  const snippet = await readFile(snippetPath, "utf8");
+  const changedSnippet = `  ${snippet}\nSAVED SNIPPET\n\n`;
+  await writeFile(snippetPath, changedSnippet);
   commands.get("prompt-composer.compose")!();
   await view("Compose prompts");
   choose("saved-preview");
@@ -170,6 +174,7 @@ export async function exercisePromptEditor(
     await view("Agent: review — not applied — pages");
   }
   assert.match(savedText.join(""), /Editor verified/);
+  assert.match(savedText.join(""), /SAVED SNIPPET\n\n/);
   choose("\u0000back");
   await view("Saved prompt changes — not applied");
   choose("\u0000back");
@@ -177,6 +182,8 @@ export async function exercisePromptEditor(
   api.ui.dialog.clear();
   assert.deepEqual(await request("/config"), running);
   assert.equal(await readFile(settingsPath, "utf8"), saved);
+  assert.equal(await readFile(snippetPath, "utf8"), changedSnippet);
+  await writeFile(snippetPath, snippet);
   current = undefined;
   commands.get("prompt-composer.compose")!();
   await view("Compose prompts");
