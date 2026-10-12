@@ -8,6 +8,7 @@ import type {
   TuiPluginMeta,
   TuiPluginModule,
 } from "@opencode-ai/plugin/tui";
+import { captureFilesystem } from "../src/filesystem.ts";
 
 export type Request = (path: string, body?: unknown) => Promise<unknown>;
 interface View {
@@ -108,7 +109,7 @@ export async function exercisePromptEditor(
     assert.equal(
       current?.title,
       title,
-      `${current?.message ?? ""}\nHost path: ${JSON.stringify(path)}\nRuntime: ${current?.title === "Prompt Composer" ? JSON.stringify(await request("/config")) : ""}`,
+      `${current?.message ?? ""}\nHost path: ${JSON.stringify(path)}\nRuntime: ${current?.title === "Prompt Composer" ? JSON.stringify(await request("/config")) : ""}\nLocal filesystem: ${current?.title === "Prompt Composer" ? JSON.stringify(await captureFilesystem({ root: api.state.path.worktree === "/" ? api.state.path.directory : api.state.path.worktree, directory: api.state.path.directory, worktree: api.state.path.worktree })) : ""}`,
     );
     return current;
   }
