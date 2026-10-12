@@ -119,6 +119,17 @@ export async function exercisePromptEditor(
   }
   commands.get("prompt-composer.compose")!();
   await view("Compose prompts");
+  choose("files");
+  await view("Prompt files");
+  choose("review/body.md");
+  assert.match(
+    (await view("Prompt file source")).message ?? "",
+    /\{\{include:review\/body.md\}\}/,
+  );
+  api.ui.dialog.clear();
+  await view("Prompt files");
+  choose("\u0000back");
+  await view("Compose prompts");
   choose("edit");
   await view("Prompt settings source");
   choose(settingsPath);
