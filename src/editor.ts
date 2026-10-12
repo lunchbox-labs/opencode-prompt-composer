@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { lstat, open, realpath, rename, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  open,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { applyEdits, modify } from "jsonc-parser";
 import type { Config } from "@opencode-ai/plugin";
@@ -160,6 +168,7 @@ export async function savePlan(plan: EditPlan): Promise<void> {
         mode: original.mode,
       });
       staged.push({ edit, temporary, original });
+      await chmod(temporary, original.mode);
     }
     await verifyInventory(plan.settings);
     await verifyReads(
@@ -182,6 +191,7 @@ export async function savePlan(plan: EditPlan): Promise<void> {
         flag: "wx",
         mode: item.original.mode,
       });
+      await chmod(item.temporary, item.original.mode);
       await rename(item.temporary, item.edit.path);
     }
     throw error;
