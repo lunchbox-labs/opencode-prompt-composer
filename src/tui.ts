@@ -83,7 +83,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
     }
   };
   let readingFiles = false;
-  const readFiles = (show: (snapshot: Snapshot) => void) => {
+  const readFiles = (show: (snapshot: Snapshot) => void, origin?: Snapshot) => {
     if (readingFiles) {
       return;
     }
@@ -93,6 +93,9 @@ const PromptComposerTui: TuiPlugin = (api) => {
     const project = root();
     run(async () => {
       try {
+        if (origin !== undefined) {
+          assertCurrent(origin);
+        }
         const snapshot = await load();
         if (!check()) {
           return;
@@ -141,7 +144,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
                 ? `The prompt file ${name} is no longer discovered. Reopen Prompt files to refresh the list.`
                 : `Filename: ${name}\n\nInclude marker:\n{{include:${name}}}\n\nWinning path:\n${source.path}\n\nShadowed paths (discovery order):\n${shadowed.length === 0 ? "(none)" : shadowed.join("\n")}`,
           });
-        });
+        }, snapshot);
       },
     });
   };
