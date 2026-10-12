@@ -40,6 +40,7 @@ export function publishState(
   native: Config,
   context: SettingsContext,
   files: SourceFile[],
+  filesystem?: unknown,
 ): void {
   const matches = (config.plugin ?? []).flatMap((entry, index) =>
     (Array.isArray(entry) && entry[1] === options) ||
@@ -62,6 +63,7 @@ export function publishState(
       [key]: {
         version: 1,
         id: randomUUID(),
+        filesystem,
         context: {
           ...context,
           directory: context.directory ?? context.root,
@@ -121,6 +123,7 @@ export function readState(
   native: Config;
   context: SettingsContext;
   inputs: Record<string, string>;
+  filesystem: unknown;
 } {
   if (!record(config) || !Array.isArray(config.plugin)) {
     throw new SettingsError(
@@ -166,6 +169,7 @@ export function readState(
   }
   return {
     id: marker.id,
+    filesystem: marker.filesystem,
     native: parseBodies(marker.native),
     context: {
       root,

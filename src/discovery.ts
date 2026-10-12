@@ -54,6 +54,7 @@ export function projectDiscoveryEnabled(
 export async function discoveryDirectories(
   context: DiscoveryContext,
   environment: NodeJS.ProcessEnv = process.env,
+  pathExists: (path: string) => Promise<boolean> = exists,
 ): Promise<string[]> {
   const xdg = environment.XDG_CONFIG_HOME;
   const global = join(
@@ -75,7 +76,7 @@ export async function discoveryDirectories(
         );
       }
       const directory = join(current, ".opencode");
-      if (await exists(directory)) {
+      if (await pathExists(directory)) {
         directories.push(directory);
       }
       if (current === stop || dirname(current) === current) {
@@ -84,7 +85,7 @@ export async function discoveryDirectories(
     }
   }
   const home = join(environment.OPENCODE_TEST_HOME ?? homedir(), ".opencode");
-  if (await exists(home)) {
+  if (await pathExists(home)) {
     directories.push(home);
   }
   if (

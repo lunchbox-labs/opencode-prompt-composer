@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { watch } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
@@ -21,6 +28,21 @@ interface View {
 async function harness(t: TestContext, native: Config) {
   const root = await mkdtemp(join(tmpdir(), "prompt-preview-"));
   t.after(() => rm(root, { recursive: true, force: true }));
+  const environment = {
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    OPENCODE_TEST_HOME: process.env.OPENCODE_TEST_HOME,
+  };
+  process.env.XDG_CONFIG_HOME = join(root, "config");
+  process.env.OPENCODE_TEST_HOME = root;
+  t.after(() => {
+    for (const [key, value] of Object.entries(environment)) {
+      if (value === undefined) {
+        Reflect.deleteProperty(process.env, key);
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
   await mkdir(join(root, ".opencode/prompts"), { recursive: true });
   const fragment = join(root, ".opencode/prompts/end.md");
   await writeFile(fragment, "Final checklist.");
@@ -54,10 +76,9 @@ async function harness(t: TestContext, native: Config) {
           return {
             data: {
               type: "text",
-              content: await readFile(
-                join(input.directory, input.path),
-                "utf8",
-              ),
+              content: (
+                await readFile(join(input.directory, input.path), "utf8")
+              ).trim(),
             },
           };
         },
@@ -424,18 +445,37 @@ test("saved preview cancellation suppresses late success and errors", async (t) 
   }
 });
 
-test("saved preview refuses mismatched server source text", async (t) => {
+test("saved preview refuses a replaced project filesystem", async (t) => {
   const h = await harness(t, {
     command: { check: { template: "{{include:end.md}}" } },
   });
-  Object.assign(h.api.client.file, {
-    read: async () => ({ data: { type: "text", content: "Other server" } }),
+  await rename(h.root, `${h.root}-server`);
+  t.after(() => rm(`${h.root}-server`, { recursive: true, force: true }));
+  await mkdir(h.root);
+  await h.open();
+  h.choose("saved-preview");
+  assert.match(
+    (await h.view("Prompt Composer")).message!,
+    /matching local filesystem identities/,
+  );
+});
+
+test("saved preview rejects a different global discovery location even with a shared project", async (t) => {
+  const h = await harness(t, { agent: { review: { prompt: "Native" } } });
+  const previous = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = join(h.root, "other-config");
+  t.after(() => {
+    if (previous === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = previous;
+    }
   });
   await h.open();
   h.choose("saved-preview");
   assert.match(
     (await h.view("Prompt Composer")).message!,
-    /do not match this OpenCode server/,
+    /matching local filesystem identities/,
   );
 });
 
