@@ -117,8 +117,9 @@ export function dialogNavigation(
     decoration !== undefined ? decoration(element, close) : element;
   const select = (props: TuiDialogSelectProps<string>) => {
     let selected = props.current;
-    return () =>
-      decorate(
+    return () => {
+      const check = checkpoint();
+      return decorate(
         api.ui.DialogSelect({
           ...props,
           get current() {
@@ -139,12 +140,18 @@ export function dialogNavigation(
               : props.options;
           },
           onMove: (option) => {
+            if (!check()) {
+              return;
+            }
             if (option.value !== backValue) {
               selected = option.value;
             }
             props.onMove?.(option);
           },
           onSelect: (option) => {
+            if (!check()) {
+              return;
+            }
             if (option.value === backValue) {
               back();
               return;
@@ -154,6 +161,7 @@ export function dialogNavigation(
           },
         }),
       );
+    };
   };
   const menu = (props: TuiDialogSelectProps<string>, root = false) =>
     show(select(props), root);

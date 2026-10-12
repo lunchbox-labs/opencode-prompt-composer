@@ -206,3 +206,51 @@ test("closing a panel never resurrects parents after another dialog, route, clie
     assert.equal(nav.canGoBack, false, change);
   }
 });
+
+test("retired picker callbacks cannot act after Back, Escape or connection replacement", async () => {
+  const view = harness();
+  const nav = view.navigation;
+  let selected = 0;
+  let moved = 0;
+  nav.menu({ title: "Root", options: [] }, true);
+  nav.menu({
+    title: "Files",
+    options: [{ title: "File", value: "file" }],
+    onMove: () => moved++,
+    onSelect: () => {
+      selected++;
+      nav.alert({ title: "Details", message: "File" });
+    },
+  });
+  const retired = view.current as TuiDialogSelectProps<string>;
+  retired.onSelect!(retired.options[0]);
+  await view.escape();
+  const restored = view.current as TuiDialogSelectProps<string>;
+  retired.onMove!(retired.options[0]);
+  retired.onSelect!(retired.options[0]);
+  retired.onSelect!(retired.options.at(-1)!);
+  assert.equal(selected, 1);
+  assert.equal(moved, 0);
+  assert.equal(view.current, restored);
+  restored.onSelect!(restored.options[0]);
+  assert.equal(selected, 2);
+  await view.escape();
+  const cancelled = view.current;
+  await view.escape();
+  await view.escape();
+  cancelled.onSelect!(cancelled.options[0]);
+  assert.equal(view.current, undefined);
+  assert.equal(selected, 2);
+  nav.menu(
+    {
+      title: "Connection",
+      options: [{ title: "File", value: "file" }],
+      onSelect: () => selected++,
+    },
+    true,
+  );
+  const disconnected = view.current as TuiDialogSelectProps<string>;
+  Object.assign(view.api, { client: {} });
+  disconnected.onSelect!(disconnected.options[0]);
+  assert.equal(selected, 2);
+});
