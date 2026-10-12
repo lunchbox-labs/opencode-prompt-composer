@@ -207,11 +207,17 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     } else {
       Reflect.set(api, "client", new Proxy(client, {}));
     }
+    const beforeChange = current;
     choose("review/findings.md");
-    assert.match(
-      (await view("Prompt Composer")).message ?? "",
-      /connection or project changed/,
-    );
+    if (change === "connection") {
+      await setTimeout(20);
+      assert.equal(current, beforeChange);
+    } else {
+      assert.match(
+        (await view("Prompt Composer")).message ?? "",
+        /connection or project changed/,
+      );
+    }
     Object.assign(api.state.path, { directory });
     Reflect.set(api, "client", client);
     api.ui.dialog.clear();
