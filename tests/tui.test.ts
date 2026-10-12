@@ -12,7 +12,7 @@ import { packageName } from "../src/registration.ts";
 
 interface View {
   title: string;
-  options?: { title: string; value: string }[];
+  options?: { title: string; value: string; description?: string }[];
   onSelect?: (item: { title: string; value: string }) => void;
   onConfirm?: (text?: string) => void;
   message?: string;
@@ -243,6 +243,21 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
   const stale = await view("Prompt Composer");
   assert.match(stale.message ?? "", /Prompt files changed/);
   assert.equal(config.agent!.review!.prompt, "Review\n\nAfter");
+  // Shared defaults must not hide the fixed project creation action.
+  const previousCustom = process.env.OPENCODE_CONFIG_DIR;
+  t.after(() => {
+    if (previousCustom === undefined) {
+      delete process.env.OPENCODE_CONFIG_DIR;
+    } else {
+      process.env.OPENCODE_CONFIG_DIR = previousCustom;
+    }
+  });
+  const shared = join(root, "shared");
+  await mkdir(shared);
+  const sharedPath = join(shared, "prompt-composer.jsonc");
+  const sharedText = '{"defaults":{"append":["Shared default"]}}';
+  await writeFile(sharedPath, sharedText);
+  process.env.OPENCODE_CONFIG_DIR = shared;
   const previousDisable = process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
   t.after(() => {
     if (previousDisable === undefined) {
@@ -292,6 +307,12 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     ),
     true,
   );
+  assert.equal(
+    (await view("Prompt settings source")).options?.find(
+      (option) => option.value === "create",
+    )?.description,
+    path,
+  );
   choose("create");
   queueMicrotask(() => Object.assign(api.state.path, { directory: root }));
   assert.match(
@@ -299,4 +320,40 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     /connection or project changed/,
   );
   await assert.rejects(readFile(path), { code: "ENOENT" });
+  Object.assign(api.state.path, { directory });
+  async function openSources() {
+    commands.get("prompt-composer.compose")!();
+    await view("Compose prompts");
+    choose("edit");
+    return view("Prompt settings source");
+  }
+  // Leaving the menu is side-effect free, including native Escape and Back.
+  await openSources();
+  choose("\u0000back");
+  await view("Compose prompts");
+  await assert.rejects(readFile(path), { code: "ENOENT" });
+  await openSources();
+  api.ui.dialog.clear();
+  await view("Compose prompts");
+  await assert.rejects(readFile(path), { code: "ENOENT" });
+  // A concurrent creator must retain its document byte for byte.
+  await openSources();
+  const concurrent = '{"agents":{"review":{"inheritDefaults":false}}}';
+  await writeFile(path, concurrent);
+  choose("create");
+  assert.match((await view("Prompt Composer")).message ?? "", /EEXIST/);
+  assert.equal(await readFile(path, "utf8"), concurrent);
+  await rm(path);
+  await openSources();
+  choose("create");
+  await view("Prompt settings applied");
+  assert.equal(await readFile(path, "utf8"), '{\n  "agents": {}\n}\n');
+  assert.equal(await readFile(sharedPath, "utf8"), sharedText);
+  assert.equal(config.agent!.review!.prompt, "Review\n\nShared default");
+  const existing = await openSources();
+  assert.equal(
+    existing.options?.some((option) => option.value === "create"),
+    false,
+  );
+  assert.ok(existing.options.some((option) => option.value === path));
 });
