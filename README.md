@@ -26,9 +26,9 @@ Optional `prompt-composer.jsonc` lives beside `prompts/`. It has only defaults a
     "review": {
       "prepend": ["{{include:review/context.md}}"],
       "append": ["Prioritize actionable findings."],
-      "inheritDefaults": false
-    }
-  }
+      "inheritDefaults": false,
+    },
+  },
 }
 ```
 
@@ -77,6 +77,6 @@ Maintainers: [release workflow setup](docs/publishing.md) covers the initial man
 
 ### Compatibility checks
 
-`engines.opencode` admits every stable 1.19 patch and excludes earlier/later minors. Exact SDK/toolchain pins are build dependencies, independent of this host support range. Run `npm run test:native` to fetch fresh canonical `opencode-ai` release metadata, select the newest version satisfying `engines.opencode`, and install that exact platform binary in an isolated prefix. The suite prints the resolved host and verifies its range and actual CLI version. It does not select from an installed binary, lockfile, cached metadata, or the unconstrained latest dist-tag; registry failures and missing platform artifacts fail instead of falling back. CI runs this dynamic latest-compatible lane on Linux and Windows, alongside `OPENCODE_TEST_VERSION=1.19.0` for reproducible floor coverage. An explicit exact override must also satisfy the declared range. The native server suite serves the packed candidate through a scoped local npm registry using its canonical package name and version, exercising the real installer, export resolution and host compatibility gate before includes, skill expansion and reload checks. Its editor checks replace terminal rendering. On Linux, an additional real PTY test registers the same canonical npm spec in `tui.jsonc`, opens `/compose-prompts`, and checks composed prompt preview. Windows runs the native server/editor/reload checks; real Windows terminal interaction is not covered.
+`engines.opencode` admits every stable 1.19 patch and excludes earlier/later minors. Exact SDK/toolchain pins are build dependencies, independent of this host support range. Run `npm run test:native` to fetch fresh canonical `opencode-ai` release metadata, select the newest version satisfying `engines.opencode`, and install that exact platform binary in an isolated prefix. The suite prints the resolved host and verifies its range and actual CLI version. It does not select from an installed binary, lockfile, cached metadata, or the unconstrained latest dist-tag; registry failures and missing platform artifacts fail instead of falling back. CI runs this dynamic latest-compatible lane on Linux and Windows, alongside `OPENCODE_TEST_VERSION=1.19.0` for reproducible floor coverage. An explicit exact override must also satisfy the declared range. The native server suite serves the packed candidate through a scoped local npm registry using its canonical package name and version, exercising the real installer, export resolution and host compatibility gate before includes, skill expansion and reload checks. Its editor checks replace terminal rendering. The harness verifies and preinstalls the native ripgrep prerequisite before starting HTTP checks, so cold dependency downloads cannot consume request deadlines or be interrupted by reloads. On Linux and Windows, an additional real PTY/ConPTY test registers the same canonical npm spec in `tui.jsonc`, attaches to the native server, opens `/compose-prompts`, and verifies composed prompt preview using a reconstructed terminal screen.
 
 Prompt Composer does not install global help skills. The skill in `docs/examples/skill-guidance` is a project example; open that example project to discover it.

@@ -15,13 +15,14 @@ import { join, resolve } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { test } from "node:test";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
 import {
   exerciseConfigEditor,
   exercisePromptEditor,
 } from "./native-editors.ts";
 import { readState } from "../src/runtime-state.ts";
 import { resolveNativeVersion, verifyNativeVersion } from "./native-host.ts";
+import { exerciseNativeTerminal } from "./native-terminal.ts";
+import { prepareRipgrep } from "./native-ripgrep.ts";
 
 const execute = promisify(execFile);
 const npm = process.env.npm_execpath;
@@ -29,7 +30,7 @@ assert.ok(npm !== undefined, "Run native tests through npm");
 
 test(
   "npm-registered native hooks preserve authored files, reload, discover overrides and compose on-demand skills",
-  { timeout: 360_000 },
+  { timeout: 600_000 },
   async (t) => {
     const root = await realpath(
       await mkdtemp(join(tmpdir(), "prompt-native-")),
@@ -137,6 +138,7 @@ test(
       })
     ).stdout.trim();
     verifyNativeVersion(version, range, actual);
+    await prepareRipgrep(root, env, t.signal);
     const packed = await execute(
       process.execPath,
       [npm, "pack", "--ignore-scripts", "--json", "--pack-destination", root],
@@ -605,34 +607,29 @@ test(
     assert.equal(await readFile(helperPath, "utf8"), helperText);
     assert.equal(await readFile(agentPath, "utf8"), commandOnlyAgentText);
     assert.equal(await readFile(settingsPath, "utf8"), "{}");
-    // Native terminal registration is distinct from the rendering-replaced editor
-    // checks above. Windows still runs the npm server/editor/reload suite.
-    if (process.platform === "linux") {
-      await writeFile(
-        join(shared, "tui.jsonc"),
-        JSON.stringify({ plugin: [npmPlugin] }),
-      );
-      await writeFile(agentPath, agentText);
-      await writeFile(settingsPath, settingsText);
-      await stopHost();
-      const terminal = await execute(
-        "python3",
-        [
-          fileURLToPath(new URL("./native-tui.py", import.meta.url)),
-          binary,
-          project,
-        ],
-        {
-          env: { ...env, TERM: "xterm-256color", COLORTERM: "truecolor" },
-          timeout: 130_000,
-          signal: t.signal,
-          maxBuffer: 1_000_000,
-        },
-      );
-      assert.match(
-        terminal.stdout,
-        /native npm TUI rendered Prompt Composer and composed preview/,
-      );
-    }
+    // Native npm TUI loading and the real terminal preview run on both operating
+    // systems, separately from the rendering-replaced editor checks above.
+    await writeFile(
+      join(shared, "tui.jsonc"),
+      JSON.stringify({ plugin: [npmPlugin] }),
+    );
+    await writeFile(agentPath, agentText);
+    await writeFile(settingsPath, settingsText);
+    await reload();
+    const terminalSession = (await api("/session", {})) as { id: string };
+    const beforeTerminal = received.length;
+    await exerciseNativeTerminal({
+      binary,
+      url,
+      sessionID: terminalSession.id,
+      project,
+      env,
+      signal: t.signal,
+    });
+    assert.equal(
+      received.length,
+      beforeTerminal,
+      "TUI preview must not send a model prompt",
+    );
   },
 );

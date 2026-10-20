@@ -75,7 +75,9 @@
     "@opentui/keymap": "0.4.5",
     "@opentui/solid": "0.4.5",
     "solid-js": "1.9.12",
-    "semver": "7.8.5"
+    "semver": "7.8.5",
+    "node-pty": "1.1.0",
+    "@xterm/headless": "6.0.0"
   },
   "overrides": {
     "@opentui/solid": {
