@@ -97,3 +97,36 @@ test("release assets are attached only after publication with isolated write per
   assert.match(publish, /contents: read/);
   assert.doesNotMatch(publish, /contents: write/);
 });
+
+test("manual draft release preflight runs before npm publish without expanding permissions", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(
+    new URL("../.github/workflows/publish.yml", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(
+    workflow,
+    /^ {2}release:/m,
+    "publishing the draft must not publish npm again",
+  );
+  assert.match(workflow, /^ {2}workflow_dispatch:/m);
+  const jobs = workflow.split(/(?=^ {2}\w+:)/m);
+  const publish = jobs.find((job) => job.startsWith("  publish:\n"));
+  assert.ok(publish);
+  const preflight = publish.indexOf(
+    "node scripts/attach-published-tarball.mjs --preflight",
+  );
+  assert.ok(
+    preflight >= 0,
+    "existing matching mutable draft must be checked before publication",
+  );
+  assert.ok(preflight < publish.indexOf("npm publish"));
+  assert.match(publish, /contents: read/);
+  assert.doesNotMatch(publish, /contents: write/);
+  assert.match(publish, /needs\.verify\.outputs\.version/);
+  assert.ok(
+    publish.indexOf("actions/checkout@") <
+      publish.indexOf("actions/download-artifact@"),
+    "checkout must preserve the later downloaded release artifact",
+  );
+});
