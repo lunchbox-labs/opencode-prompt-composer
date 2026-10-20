@@ -236,7 +236,6 @@ export async function exerciseNativeTerminal(options: {
     ],
   });
   try {
-    await terminal.wait("Ask anything");
     await terminal.waitFor(
       terminal.promptFocused,
       "main conversation input focus",
