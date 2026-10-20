@@ -1,11 +1,9 @@
 name: Publish @lunchbox-labs/opencode-prompt-composer
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
-        description: Stable vX.Y.Z tag at the current main commit
+        description: Stable vX.Y.Z tag at current main with an existing draft release
         required: true
         type: string
 
@@ -20,12 +18,11 @@ jobs:
   verify:
     if: >-
       github.repository == 'lunchbox-labs/opencode-prompt-composer' &&
-      ((github.event_name == 'release' && !github.event.release.prerelease) ||
-       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+      RELEASE_TAG: ${{ inputs.tag }}
     outputs:
       access: ${{ steps.release.outputs.access }}
       name: ${{ steps.release.outputs.name }}
@@ -36,7 +33,7 @@ jobs:
         run: '[[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]'
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: refs/tags/${{ inputs.tag || github.event.release.tag_name }}
+          ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
           persist-credentials: false
       - name: Require a commit already on main
@@ -78,6 +75,10 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: lunchbox-labs-opencode-prompt-composer-release
@@ -89,6 +90,13 @@ jobs:
           package-manager-cache: false
       - name: Use a trusted-publishing-capable npm version
         run: npm install --global npm@11.9.0 --ignore-scripts --no-audit --no-fund
+      - name: Require an existing mutable draft release before npm publication
+        env:
+          NPM_PACKAGE_NAME: ${{ needs.verify.outputs.name }}
+          NPM_PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/attach-published-tarball.mjs --preflight
       - name: Publish the verified tarball with OIDC
         working-directory: release
         env:
@@ -118,6 +126,6 @@ jobs:
         env:
           NPM_PACKAGE_NAME: ${{ needs.verify.outputs.name }}
           NPM_PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
-          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          RELEASE_TAG: ${{ inputs.tag }}
           GH_TOKEN: ${{ github.token }}
         run: node scripts/attach-published-tarball.mjs
