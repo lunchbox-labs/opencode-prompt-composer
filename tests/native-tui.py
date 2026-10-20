@@ -78,7 +78,9 @@ try:
     command("/compose-prompts", "Compose prompts")
     wait_for("Compose prompts", "Edit prompt settings", "Preview effective prompts")
     os.write(terminal, b"\x1b[B\r")
-    wait_for("Effective prompts", "Project updated")
+    # The renderer updates the dialog title using cursor movement, so the raw
+    # stream may contain only its changed suffix. Assert the unique preview body.
+    wait_for("Review Project updated", "State uncertainty.")
     print("native npm TUI rendered Prompt Composer and composed preview")
 except BaseException:
     print(" ".join(screen().split())[-6000:], file=sys.stderr)

@@ -201,9 +201,29 @@ test(
     });
     await writeFile(settingsPath, settingsText);
     const tarball = await readFile(join(root, filename));
+    const manifest = JSON.parse(
+      await readFile(join(plugin, "package.json"), "utf8"),
+    ) as { name: string; version: string };
+    let registry = "";
     let tarballRequests = 0;
     const received: string[] = [];
     const modelServer = createServer((request, response) => {
+      if (decodeURIComponent(request.url ?? "") === `/${manifest.name}`) {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify({
+            name: manifest.name,
+            "dist-tags": { latest: manifest.version },
+            versions: {
+              [manifest.version]: {
+                ...manifest,
+                dist: { tarball: `${registry}/plugin.tgz` },
+              },
+            },
+          }),
+        );
+        return;
+      }
       if (request.url === "/plugin.tgz") {
         tarballRequests++;
         response.writeHead(200, { "Content-Type": "application/octet-stream" });
@@ -255,13 +275,16 @@ test(
     const address = modelServer.address();
     assert.ok(address !== null && typeof address !== "string");
     const configPlugin = process.env.CONFIG_COMPOSER_DIR;
-    // A remote tarball is an npm spec, not a file entry: the real native
-    // installer, package exports and engines.opencode gate all run here.
-    const npmPlugin = `http://127.0.0.1:${address.port}/plugin.tgz`;
+    // Retain the package's real npm identity. Only this scope uses the local
+    // registry; production dependencies still resolve through the normal registry.
+    registry = `http://127.0.0.1:${address.port}`;
+    await writeFile(
+      join(root, "home/.npmrc"),
+      `@lunchbox-labs:registry=${registry}\n`,
+    );
+    const npmPlugin = `${manifest.name}@${manifest.version}`;
     const plugins =
-      configPlugin === undefined
-        ? [[npmPlugin, {}]]
-        : [configPlugin, [npmPlugin, {}]];
+      configPlugin === undefined ? [npmPlugin] : [configPlugin, npmPlugin];
     await writeFile(
       join(shared, "opencode.jsonc"),
       JSON.stringify({
