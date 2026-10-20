@@ -21,7 +21,7 @@ export function verifyNativeVersion(
 ): void {
   assert.ok(
     semver.validRange(range) !== null,
-    `Invalid engines.opencode range: ${range}`,
+    `Invalid tested OpenCode range: ${range}`,
   );
   assert.equal(
     semver.valid(version),
@@ -30,7 +30,7 @@ export function verifyNativeVersion(
   );
   assert.ok(
     semver.satisfies(version, range),
-    `OpenCode ${version} does not satisfy engines.opencode ${range}`,
+    `OpenCode ${version} does not satisfy tested OpenCode range ${range}`,
   );
   if (actual !== undefined) {
     assert.equal(
@@ -51,7 +51,7 @@ export async function resolveNativeVersion(options: {
 }): Promise<string> {
   assert.ok(
     semver.validRange(options.range) !== null,
-    `Invalid engines.opencode range: ${options.range}`,
+    `Invalid tested OpenCode range: ${options.range}`,
   );
   if (
     options.requested !== undefined &&

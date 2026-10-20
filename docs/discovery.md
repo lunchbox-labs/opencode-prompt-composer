@@ -1,6 +1,6 @@
 # Discovery
 
-The supported OpenCode version is listed in the [root README](../README.md). The discovery baseline is source commit `733b2c627e5aec39cb33cc22373bdce33053ef2c`.
+The tested OpenCode range is listed in the [root README](../README.md). The discovery baseline is source commit `733b2c627e5aec39cb33cc22373bdce33053ef2c`.
 
 The loader mirrors [`ConfigPaths.directories`](https://github.com/anomalyco/opencode/blob/733b2c627e5aec39cb33cc22373bdce33053ef2c/packages/opencode/src/config/paths.ts). It visits:
 

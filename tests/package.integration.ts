@@ -105,6 +105,9 @@ console.log(id);
         "utf8",
       ),
     ) as Record<string, Record<string, string> | undefined>;
+    assert.equal(Object.hasOwn(manifest.engines ?? {}, "opencode"), false);
+    assert.equal(manifest.engines?.node, ">=22.18.0");
+    assert.ok(!files.some((file) => file.path === "tests/opencode.json"));
     for (const field of [
       "dependencies",
       "optionalDependencies",

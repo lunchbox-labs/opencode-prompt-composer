@@ -89,20 +89,24 @@ test(
       USERPROFILE: env.USERPROFILE,
       npm_config_cache: env.npm_config_cache,
     };
-    const manifestSupport = JSON.parse(
-      await readFile(resolve("package.json"), "utf8"),
-    ) as { engines: { opencode: string } };
-    const range = manifestSupport.engines.opencode;
+    const testSupport = JSON.parse(
+      await readFile(new URL("./opencode.json", import.meta.url), "utf8"),
+    ) as { range: string; floor: string };
+    const range = testSupport.range;
+    verifyNativeVersion(testSupport.floor, range);
     const version = await resolveNativeVersion({
       npm,
       range,
       cache: join(root, "metadata-cache"),
       env: installEnv,
       signal: t.signal,
-      requested: process.env.OPENCODE_TEST_VERSION,
+      requested:
+        process.env.OPENCODE_TEST_VERSION === "floor"
+          ? testSupport.floor
+          : process.env.OPENCODE_TEST_VERSION,
     });
     t.diagnostic(
-      `Native OpenCode ${version}; engines.opencode=${range}; lane=${process.env.OPENCODE_TEST_VERSION ?? "latest-compatible"}`,
+      `Native OpenCode ${version}; tested OpenCode range=${range}; lane=${process.env.OPENCODE_TEST_VERSION ?? "latest-compatible"}`,
     );
     const name =
       process.platform === "win32"
