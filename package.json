@@ -9,8 +9,7 @@
     "url": "git+https://github.com/lunchbox-labs/opencode-prompt-composer.git"
   },
   "engines": {
-    "node": ">=22.18.0",
-    "opencode": "1.19.x"
+    "node": ">=22.18.0"
   },
   "exports": {
     ".": {
