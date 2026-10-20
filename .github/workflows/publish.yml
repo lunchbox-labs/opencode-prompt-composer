@@ -1,11 +1,6 @@
 name: Publish @lunchbox-labs/opencode-prompt-composer
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Stable vX.Y.Z tag at current main with an existing draft release
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -15,25 +10,55 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify:
+  prepare:
     if: >-
       github.repository == 'lunchbox-labs/opencode-prompt-composer' &&
       github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
+    permissions:
+      contents: write
     env:
-      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_COMMIT: ${{ github.sha }}
     outputs:
       access: ${{ steps.release.outputs.access }}
       name: ${{ steps.release.outputs.name }}
       version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
     steps:
-      - name: Require a stable version tag
-        shell: bash
-        run: '[[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]'
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Validate the intended source and release metadata
+        id: release
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+          export RELEASE_TAG="v$(node -p "require('./package.json').version")"
+          node scripts/validate-release.mjs
+          printf 'tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - name: Create or reuse the exact tag and draft
+        env:
+          NPM_PACKAGE_NAME: ${{ steps.release.outputs.name }}
+          NPM_PACKAGE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-lifecycle.mjs prepare
+
+  verify:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Require a commit already on main
@@ -55,8 +80,10 @@ jobs:
       - run: npm run test:native
       - name: Pack the verified build
         run: |
-          mkdir release
+          mkdir release release-repack
           npm pack --ignore-scripts --pack-destination release
+          npm pack --ignore-scripts --pack-destination release-repack
+          cmp release/*.tgz release-repack/*.tgz
           cd release
           sha256sum ./*.tgz > SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -67,7 +94,7 @@ jobs:
           retention-days: 3
 
   publish:
-    needs: verify
+    needs: [prepare, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment: npm
@@ -90,25 +117,21 @@ jobs:
           package-manager-cache: false
       - name: Use a trusted-publishing-capable npm version
         run: npm install --global npm@11.9.0 --ignore-scripts --no-audit --no-fund
-      - name: Require an existing mutable draft release before npm publication
+      - name: Publish npm or verify an identical existing version
         env:
-          NPM_PACKAGE_NAME: ${{ needs.verify.outputs.name }}
-          NPM_PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          NPM_PACKAGE_NAME: ${{ needs.prepare.outputs.name }}
+          NPM_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+          NPM_ACCESS: ${{ needs.prepare.outputs.access }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_COMMIT: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/attach-published-tarball.mjs --preflight
-      - name: Publish the verified tarball with OIDC
-        working-directory: release
-        env:
-          NPM_ACCESS: ${{ needs.verify.outputs.access }}
-          # This repository and npm package are public.
           NPM_CONFIG_PROVENANCE: 'true'
         run: |
-          sha256sum --check SHA256SUMS
-          npm publish ./*.tgz --ignore-scripts --access "$NPM_ACCESS" --tag latest
+          (cd release && sha256sum --check SHA256SUMS)
+          node scripts/release-lifecycle.mjs npm
 
-  attach:
-    needs: [verify, publish]
+  finish:
+    needs: [prepare, verify, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -118,14 +141,21 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: lunchbox-labs-opencode-prompt-composer-release
+          path: release
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
           package-manager-cache: false
-      - name: Attach the verified published npm tarball
+      - name: Verify npm bytes, attach the archive and publish the draft
         env:
-          NPM_PACKAGE_NAME: ${{ needs.verify.outputs.name }}
-          NPM_PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          NPM_PACKAGE_NAME: ${{ needs.prepare.outputs.name }}
+          NPM_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_COMMIT: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/attach-published-tarball.mjs
+        run: |
+          (cd release && sha256sum --check SHA256SUMS)
+          node scripts/release-lifecycle.mjs finish
