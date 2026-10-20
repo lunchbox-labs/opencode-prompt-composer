@@ -15,7 +15,7 @@ test(
     const root = await mkdtemp(join(tmpdir(), "prompt-tui-cleanup-"));
     const binary = join(root, "host.py");
     let host;
-    let driver;
+    let driver = null;
     t.after(async () => {
       driver?.kill("SIGKILL");
       if (host !== undefined) {
