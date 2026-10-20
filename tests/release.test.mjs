@@ -74,3 +74,26 @@ test("release validation rejects private, provisional, mismatched, prerelease, a
     assert.throws(() => validateRelease(release, tag), /release tag/);
   }
 });
+
+test("release assets are attached only after publication with isolated write permission", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(
+    new URL("../.github/workflows/publish.yml", import.meta.url),
+    "utf8",
+  );
+  const jobs = workflow.split(/(?=^ {2}\w+:)/m);
+  const attachment = jobs.find((job) => job.startsWith("  attach:\n"));
+  assert.ok(
+    attachment,
+    "a separate postpublication attachment job is required",
+  );
+  assert.match(attachment, /needs: \[verify, publish\]/);
+  assert.match(attachment, /contents: write/);
+  assert.match(attachment, /node scripts\/attach-published-tarball\.mjs/);
+  assert.match(attachment, /needs\.verify\.outputs\.name/);
+  assert.match(attachment, /needs\.verify\.outputs\.version/);
+  const publish = jobs.find((job) => job.startsWith("  publish:\n"));
+  assert.ok(publish);
+  assert.match(publish, /contents: read/);
+  assert.doesNotMatch(publish, /contents: write/);
+});
