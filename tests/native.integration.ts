@@ -21,16 +21,11 @@ import {
   exercisePromptEditor,
 } from "./native-editors.ts";
 import { readState } from "../src/runtime-state.ts";
+import { resolveNativeVersion, verifyNativeVersion } from "./native-host.ts";
 
 const execute = promisify(execFile);
 const npm = process.env.npm_execpath;
 assert.ok(npm !== undefined, "Run native tests through npm");
-const version = process.env.OPENCODE_TEST_VERSION ?? "1.19.0";
-assert.match(
-  version,
-  /^1\.19\.\d+$/,
-  "Native baseline must be an exact supported patch",
-);
 
 test(
   "npm-registered native hooks preserve authored files, reload, discover overrides and compose on-demand skills",
@@ -93,43 +88,55 @@ test(
       USERPROFILE: env.USERPROFILE,
       npm_config_cache: env.npm_config_cache,
     };
-    let binary = process.env.OPENCODE_BIN;
-    if (binary === undefined) {
-      const name =
-        process.platform === "win32"
-          ? "opencode-windows-x64"
-          : "opencode-linux-x64";
-      await execute(
-        process.execPath,
-        [
-          npm,
-          "install",
-          "--prefix",
-          join(root, "host"),
-          "--no-audit",
-          "--no-fund",
-          `${name}@${version}`,
-        ],
-        { env: installEnv, timeout: 120_000, signal: t.signal },
-      );
-      binary = join(
-        root,
-        "host/node_modules",
-        name,
-        "bin",
-        process.platform === "win32" ? "opencode.exe" : "opencode",
-      );
-    }
-    assert.equal(
-      (
-        await execute(binary, ["--version"], {
-          env,
-          timeout: 30_000,
-          signal: t.signal,
-        })
-      ).stdout.trim(),
-      version,
+    const manifestSupport = JSON.parse(
+      await readFile(resolve("package.json"), "utf8"),
+    ) as { engines: { opencode: string } };
+    const range = manifestSupport.engines.opencode;
+    const version = await resolveNativeVersion({
+      npm,
+      range,
+      cache: join(root, "metadata-cache"),
+      env: installEnv,
+      signal: t.signal,
+      requested: process.env.OPENCODE_TEST_VERSION,
+    });
+    t.diagnostic(
+      `Native OpenCode ${version}; engines.opencode=${range}; lane=${process.env.OPENCODE_TEST_VERSION ?? "latest-compatible"}`,
     );
+    const name =
+      process.platform === "win32"
+        ? "opencode-windows-x64"
+        : "opencode-linux-x64";
+    // Install the exact canonical release into a fresh prefix. Missing platform
+    // artifacts are failures; never silently fall back to an older host.
+    await execute(
+      process.execPath,
+      [
+        npm,
+        "install",
+        "--prefix",
+        join(root, "host"),
+        "--no-audit",
+        "--no-fund",
+        `${name}@${version}`,
+      ],
+      { env: installEnv, timeout: 120_000, signal: t.signal },
+    );
+    const binary = join(
+      root,
+      "host/node_modules",
+      name,
+      "bin",
+      process.platform === "win32" ? "opencode.exe" : "opencode",
+    );
+    const actual = (
+      await execute(binary, ["--version"], {
+        env,
+        timeout: 30_000,
+        signal: t.signal,
+      })
+    ).stdout.trim();
+    verifyNativeVersion(version, range, actual);
     const packed = await execute(
       process.execPath,
       [npm, "pack", "--ignore-scripts", "--json", "--pack-destination", root],
