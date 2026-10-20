@@ -75,58 +75,45 @@ test("release validation rejects private, provisional, mismatched, prerelease, a
   }
 });
 
-test("release assets are attached only after publication with isolated write permission", async () => {
+test("manual lifecycle isolates permissions and gates publication on verified artifacts", async () => {
   const { readFile } = await import("node:fs/promises");
   const workflow = await readFile(
     new URL("../.github/workflows/publish.yml", import.meta.url),
     "utf8",
   );
-  const jobs = workflow.split(/(?=^ {2}\w+:)/m);
-  const attachment = jobs.find((job) => job.startsWith("  attach:\n"));
-  assert.ok(
-    attachment,
-    "a separate postpublication attachment job is required",
-  );
-  assert.match(attachment, /needs: \[verify, publish\]/);
-  assert.match(attachment, /contents: write/);
-  assert.match(attachment, /node scripts\/attach-published-tarball\.mjs/);
-  assert.match(attachment, /needs\.verify\.outputs\.name/);
-  assert.match(attachment, /needs\.verify\.outputs\.version/);
-  const publish = jobs.find((job) => job.startsWith("  publish:\n"));
-  assert.ok(publish);
-  assert.match(publish, /contents: read/);
-  assert.doesNotMatch(publish, /contents: write/);
-});
-
-test("manual draft release preflight runs before npm publish without expanding permissions", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const workflow = await readFile(
-    new URL("../.github/workflows/publish.yml", import.meta.url),
-    "utf8",
-  );
-  assert.doesNotMatch(
-    workflow,
-    /^ {2}release:/m,
-    "publishing the draft must not publish npm again",
-  );
+  assert.doesNotMatch(workflow, /^ {2}release:/m);
   assert.match(workflow, /^ {2}workflow_dispatch:/m);
+  assert.doesNotMatch(workflow, /inputs:/);
   const jobs = workflow.split(/(?=^ {2}\w+:)/m);
+  const prepare = jobs.find((job) => job.startsWith("  prepare:\n"));
+  const verify = jobs.find((job) => job.startsWith("  verify:\n"));
   const publish = jobs.find((job) => job.startsWith("  publish:\n"));
-  assert.ok(publish);
-  const preflight = publish.indexOf(
-    "node scripts/attach-published-tarball.mjs --preflight",
-  );
-  assert.ok(
-    preflight >= 0,
-    "existing matching mutable draft must be checked before publication",
-  );
-  assert.ok(preflight < publish.indexOf("npm publish"));
+  const finish = jobs.find((job) => job.startsWith("  finish:\n"));
+  assert.ok(prepare && verify && publish && finish);
+  assert.match(prepare, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(prepare, /contents: write/);
+  assert.doesNotMatch(prepare, /id-token: write/);
+  assert.match(prepare, /node scripts\/validate-release\.mjs/);
+  assert.match(prepare, /node scripts\/release-lifecycle\.mjs prepare/);
+  assert.match(verify, /needs: prepare/);
+  assert.doesNotMatch(verify, /contents: write|id-token: write/);
+  assert.match(verify, /cmp release\/\*\.tgz release-repack\/\*\.tgz/);
+  assert.match(publish, /needs: \[prepare, verify\]/);
   assert.match(publish, /contents: read/);
-  assert.doesNotMatch(publish, /contents: write/);
-  assert.match(publish, /needs\.verify\.outputs\.version/);
-  assert.ok(
-    publish.indexOf("actions/checkout@") <
-      publish.indexOf("actions/download-artifact@"),
-    "checkout must preserve the later downloaded release artifact",
-  );
+  assert.match(publish, /id-token: write/);
+  assert.match(publish, /node scripts\/release-lifecycle\.mjs npm/);
+  assert.match(finish, /needs: \[prepare, verify, publish\]/);
+  assert.match(finish, /contents: write/);
+  assert.doesNotMatch(finish, /id-token: write/);
+  assert.match(finish, /node scripts\/release-lifecycle\.mjs finish/);
+  for (const job of [publish, finish]) {
+    assert.ok(
+      job.indexOf("actions/checkout@") <
+        job.indexOf("actions/download-artifact@"),
+    );
+    assert.ok(
+      job.indexOf("sha256sum --check") <
+        job.indexOf("node scripts/release-lifecycle.mjs"),
+    );
+  }
 });

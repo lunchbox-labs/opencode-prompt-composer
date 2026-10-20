@@ -27,6 +27,47 @@ export function releaseFailureMessage(error) {
     : "[configuration] release operation failed";
 }
 
+export async function downloadReleaseAsset(
+  {
+    repository,
+    token,
+    api = "https://api.github.com",
+    fetch: request = globalThis.fetch,
+  },
+  id,
+) {
+  assert.ok(Number.isSafeInteger(id) && id > 0, "invalid asset identity");
+  let response = await request(
+    `${api}/repos/${repository}/releases/assets/${id}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/octet-stream",
+      },
+      redirect: "manual",
+      signal: AbortSignal.timeout(30_000),
+    },
+  );
+  if ([301, 302, 303, 307, 308].includes(response.status)) {
+    const target = new URL(response.headers.get("location"));
+    assert.ok(
+      target.protocol === "https:" &&
+        [
+          "release-assets.githubusercontent.com",
+          "objects.githubusercontent.com",
+        ].includes(target.hostname),
+      "unexpected asset redirect",
+    );
+    await response.body?.cancel();
+    response = await request(target, {
+      redirect: "error",
+      signal: AbortSignal.timeout(30_000),
+    });
+  }
+  assert.ok(response.ok, "GitHub asset download failed");
+  return Buffer.from(await response.arrayBuffer());
+}
+
 export async function preflightDraftRelease({
   name,
   version,
@@ -35,6 +76,7 @@ export async function preflightDraftRelease({
   token,
   api = "https://api.github.com",
   fetch: request = globalThis.fetch,
+  allowPublishedReadOnly = false,
 }) {
   const stage = "draft-preflight";
   try {
@@ -62,8 +104,31 @@ export async function preflightDraftRelease({
       typeof token === "string" && token.length > 0,
       "GitHub token is required",
     );
-    const get = (url, headers) =>
-      request(url, { headers, signal: AbortSignal.timeout(30_000) });
+    const get = async (url, headers) => {
+      const response = await request(url, {
+        headers,
+        redirect: "manual",
+        signal: AbortSignal.timeout(30_000),
+      });
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const target = new URL(response.headers.get("location"));
+        assert.ok(
+          headers?.Accept === "application/octet-stream" &&
+            target.protocol === "https:" &&
+            [
+              "release-assets.githubusercontent.com",
+              "objects.githubusercontent.com",
+            ].includes(target.hostname),
+          "unexpected HTTP redirect",
+        );
+        await response.body?.cancel();
+        return request(target, {
+          redirect: "error",
+          signal: AbortSignal.timeout(30_000),
+        });
+      }
+      return response;
+    };
     const headers = {
       Authorization: `Bearer ${token}`,
       Accept: "application/vnd.github+json",
@@ -93,14 +158,14 @@ export async function preflightDraftRelease({
     );
     const release = matches[0];
     assert.equal(release.tag_name, tag, "GitHub release tag differs");
-    assert.notEqual(
-      release.immutable,
-      true,
+    assert.ok(
+      (allowPublishedReadOnly && release.draft === false) ||
+        release.immutable !== true,
       "GitHub release is immutable; assets cannot be attached",
     );
-    assert.equal(
-      release.draft,
-      true,
+    assert.ok(
+      typeof release.draft === "boolean" &&
+        (release.draft || allowPublishedReadOnly),
       "GitHub release must remain a draft until assets are attached",
     );
     assert.equal(release.prerelease, false, "GitHub release must be stable");
@@ -125,6 +190,7 @@ export async function attachPublishedTarball({
   uploads = "https://uploads.github.com",
   fetch: request = globalThis.fetch,
   retryDelay = 2000,
+  allowPublishedReadOnly = false,
 }) {
   let stage = "configuration";
   try {
@@ -152,8 +218,31 @@ export async function attachPublishedTarball({
       typeof token === "string" && token.length > 0,
       "GitHub token is required",
     );
-    const get = (url, headers) =>
-      request(url, { headers, signal: AbortSignal.timeout(30_000) });
+    const get = async (url, headers) => {
+      const response = await request(url, {
+        headers,
+        redirect: "manual",
+        signal: AbortSignal.timeout(30_000),
+      });
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const target = new URL(response.headers.get("location"));
+        assert.ok(
+          headers?.Accept === "application/octet-stream" &&
+            target.protocol === "https:" &&
+            [
+              "release-assets.githubusercontent.com",
+              "objects.githubusercontent.com",
+            ].includes(target.hostname),
+          "unexpected HTTP redirect",
+        );
+        await response.body?.cancel();
+        return request(target, {
+          redirect: "error",
+          signal: AbortSignal.timeout(30_000),
+        });
+      }
+      return response;
+    };
     stage = "draft-preflight";
     const { release, headers } = await preflightDraftRelease({
       name,
@@ -163,6 +252,7 @@ export async function attachPublishedTarball({
       token,
       api,
       fetch: request,
+      allowPublishedReadOnly,
     });
     stage = "registry-metadata";
     const metadataURL = `${registry}/${encodeURIComponent(name)}/${version}`;
@@ -196,7 +286,8 @@ export async function attachPublishedTarball({
     );
     const tarballURL = new URL(metadata.dist.tarball);
     assert.ok(
-      tarballURL.protocol === "https:" ||
+      (tarballURL.protocol === "https:" &&
+        tarballURL.hostname === "registry.npmjs.org") ||
         (new URL(registry).protocol === "http:" &&
           tarballURL.origin === new URL(registry).origin),
       "npm tarball must use HTTPS",
@@ -296,10 +387,16 @@ export async function attachPublishedTarball({
       return { action: "unchanged", name: assetName };
     }
     stage = "github-asset-upload";
+    assert.equal(
+      release.draft,
+      true,
+      "published releases cannot receive new assets",
+    );
     const response = await request(
       `${uploads}/repos/${repository}/releases/${release.id}/assets?name=${encodeURIComponent(assetName)}`,
       {
         method: "POST",
+        redirect: "error",
         headers: { ...headers, "Content-Type": "application/gzip" },
         body: bytes,
         signal: AbortSignal.timeout(60_000),
