@@ -223,7 +223,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // Deliberately omit response bodies, request URLs and credentials from release logs.
     console.error(
       error instanceof assert.AssertionError
-        ? error.message
+        ? error.message.split("\n")[0]
         : "Published tarball attachment failed; check registry and GitHub availability.",
     );
     process.exitCode = 1;
