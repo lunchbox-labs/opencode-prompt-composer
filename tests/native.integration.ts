@@ -20,15 +20,17 @@ import {
   exercisePromptEditor,
 } from "./native-editors.ts";
 import { readState } from "../src/runtime-state.ts";
+import { resolveNativeVersion, verifyNativeVersion } from "./native-host.ts";
+import { exerciseNativeTerminal } from "./native-terminal.ts";
+import { prepareRipgrep } from "./native-ripgrep.ts";
 
 const execute = promisify(execFile);
 const npm = process.env.npm_execpath;
 assert.ok(npm !== undefined, "Run native tests through npm");
-const version = "1.18.34";
 
 test(
-  "installed native hooks preserve authored files, reload, discover overrides and compose on-demand skills",
-  { timeout: 240_000 },
+  "npm-registered native hooks preserve authored files, reload, discover overrides and compose on-demand skills",
+  { timeout: 600_000 },
   async (t) => {
     const root = await realpath(
       await mkdtemp(join(tmpdir(), "prompt-native-")),
@@ -64,6 +66,9 @@ test(
       }
     }
     Object.assign(env, {
+      HOME: join(root, "home"),
+      USERPROFILE: join(root, "home"),
+      npm_config_cache: join(root, "npm-cache"),
       XDG_CONFIG_HOME: join(root, "config"),
       XDG_DATA_HOME: join(root, "data"),
       XDG_STATE_HOME: join(root, "state"),
@@ -77,47 +82,67 @@ test(
       NO_PROXY: "localhost,127.0.0.1,::1",
       no_proxy: "localhost,127.0.0.1,::1",
     });
-    let binary = process.env.OPENCODE_BIN;
-    if (binary === undefined) {
-      const name =
-        process.platform === "win32"
-          ? "opencode-windows-x64"
-          : "opencode-linux-x64";
-      await execute(
-        process.execPath,
-        [
-          npm,
-          "install",
-          "--prefix",
-          join(root, "host"),
-          "--no-audit",
-          "--no-fund",
-          `${name}@${version}`,
-        ],
-        { timeout: 120_000, signal: t.signal },
-      );
-      binary = join(
-        root,
-        "host/node_modules",
-        name,
-        "bin",
-        process.platform === "win32" ? "opencode.exe" : "opencode",
-      );
-    }
-    assert.equal(
-      (
-        await execute(binary, ["--version"], {
-          env,
-          timeout: 30_000,
-          signal: t.signal,
-        })
-      ).stdout.trim(),
-      version,
+    await mkdir(join(root, "home"), { recursive: true });
+    const installEnv = {
+      ...process.env,
+      HOME: env.HOME,
+      USERPROFILE: env.USERPROFILE,
+      npm_config_cache: env.npm_config_cache,
+    };
+    const manifestSupport = JSON.parse(
+      await readFile(resolve("package.json"), "utf8"),
+    ) as { engines: { opencode: string } };
+    const range = manifestSupport.engines.opencode;
+    const version = await resolveNativeVersion({
+      npm,
+      range,
+      cache: join(root, "metadata-cache"),
+      env: installEnv,
+      signal: t.signal,
+      requested: process.env.OPENCODE_TEST_VERSION,
+    });
+    t.diagnostic(
+      `Native OpenCode ${version}; engines.opencode=${range}; lane=${process.env.OPENCODE_TEST_VERSION ?? "latest-compatible"}`,
     );
+    const name =
+      process.platform === "win32"
+        ? "opencode-windows-x64"
+        : "opencode-linux-x64";
+    // Install the exact canonical release into a fresh prefix. Missing platform
+    // artifacts are failures; never silently fall back to an older host.
+    await execute(
+      process.execPath,
+      [
+        npm,
+        "install",
+        "--prefix",
+        join(root, "host"),
+        "--no-audit",
+        "--no-fund",
+        `${name}@${version}`,
+      ],
+      { env: installEnv, timeout: 120_000, signal: t.signal },
+    );
+    const binary = join(
+      root,
+      "host/node_modules",
+      name,
+      "bin",
+      process.platform === "win32" ? "opencode.exe" : "opencode",
+    );
+    const actual = (
+      await execute(binary, ["--version"], {
+        env,
+        timeout: 30_000,
+        signal: t.signal,
+      })
+    ).stdout.trim();
+    verifyNativeVersion(version, range, actual);
+    await prepareRipgrep(root, env, t.signal);
     const packed = await execute(
       process.execPath,
       [npm, "pack", "--ignore-scripts", "--json", "--pack-destination", root],
-      { cwd: resolve("."), timeout: 60_000, signal: t.signal },
+      { cwd: resolve("."), env: installEnv, timeout: 60_000, signal: t.signal },
     );
     const [{ filename }] = JSON.parse(packed.stdout) as { filename: string }[];
     const install = join(root, "installed");
@@ -133,7 +158,7 @@ test(
         "--no-fund",
         join(root, filename),
       ],
-      { timeout: 120_000, signal: t.signal },
+      { env: installEnv, timeout: 120_000, signal: t.signal },
     );
     const plugin = join(
       install,
@@ -184,8 +209,36 @@ test(
       },
     });
     await writeFile(settingsPath, settingsText);
+    const tarball = await readFile(join(root, filename));
+    const manifest = JSON.parse(
+      await readFile(join(plugin, "package.json"), "utf8"),
+    ) as { name: string; version: string };
+    let registry = "";
+    let tarballRequests = 0;
     const received: string[] = [];
     const modelServer = createServer((request, response) => {
+      if (decodeURIComponent(request.url ?? "") === `/${manifest.name}`) {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify({
+            name: manifest.name,
+            "dist-tags": { latest: manifest.version },
+            versions: {
+              [manifest.version]: {
+                ...manifest,
+                dist: { tarball: `${registry}/plugin.tgz` },
+              },
+            },
+          }),
+        );
+        return;
+      }
+      if (request.url === "/plugin.tgz") {
+        tarballRequests++;
+        response.writeHead(200, { "Content-Type": "application/octet-stream" });
+        response.end(tarball);
+        return;
+      }
       let text = "";
       request.on("data", (chunk: Buffer) => {
         text += chunk.toString();
@@ -231,8 +284,16 @@ test(
     const address = modelServer.address();
     assert.ok(address !== null && typeof address !== "string");
     const configPlugin = process.env.CONFIG_COMPOSER_DIR;
+    // Retain the package's real npm identity. Only this scope uses the local
+    // registry; production dependencies still resolve through the normal registry.
+    registry = `http://127.0.0.1:${address.port}`;
+    await writeFile(
+      join(root, "home/.npmrc"),
+      `@lunchbox-labs:registry=${registry}\n`,
+    );
+    const npmPlugin = `${manifest.name}@${manifest.version}`;
     const plugins =
-      configPlugin === undefined ? [plugin] : [configPlugin, plugin];
+      configPlugin === undefined ? [npmPlugin] : [configPlugin, npmPlugin];
     await writeFile(
       join(shared, "opencode.jsonc"),
       JSON.stringify({
@@ -299,7 +360,7 @@ test(
           "--save-exact",
           `@opencode-ai/plugin@${version}`,
         ],
-        { cwd: directory, timeout: 120_000, signal: t.signal },
+        { cwd: directory, env: installEnv, timeout: 120_000, signal: t.signal },
       );
     }
     t.signal.throwIfAborted();
@@ -412,6 +473,10 @@ test(
       }
       throw new Error(`No fresh prompt runtime after disposal.\n${logs}`);
     }
+    assert.ok(
+      tarballRequests > 0,
+      "Native npm loader must fetch the packed candidate",
+    );
     assert.equal(
       config.agent.review.prompt,
       "Use evidence.\n\nReview Project evidence\n\nState uncertainty.",
@@ -542,5 +607,29 @@ test(
     assert.equal(await readFile(helperPath, "utf8"), helperText);
     assert.equal(await readFile(agentPath, "utf8"), commandOnlyAgentText);
     assert.equal(await readFile(settingsPath, "utf8"), "{}");
+    // Native npm TUI loading and the real terminal preview run on both operating
+    // systems, separately from the rendering-replaced editor checks above.
+    await writeFile(
+      join(shared, "tui.jsonc"),
+      JSON.stringify({ plugin: [npmPlugin] }),
+    );
+    await writeFile(agentPath, agentText);
+    await writeFile(settingsPath, settingsText);
+    await reload();
+    const terminalSession = (await api("/session", {})) as { id: string };
+    const beforeTerminal = received.length;
+    await exerciseNativeTerminal({
+      binary,
+      url,
+      sessionID: terminalSession.id,
+      project,
+      env,
+      signal: t.signal,
+    });
+    assert.equal(
+      received.length,
+      beforeTerminal,
+      "TUI preview must not send a model prompt",
+    );
   },
 );

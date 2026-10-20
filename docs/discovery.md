@@ -1,8 +1,8 @@
 # Discovery
 
-The supported OpenCode version is listed in the [root README](../README.md). The discovery baseline is source commit `aec0b9a6d8898f68f923aaf08b7306d931fd9d76`.
+The supported OpenCode version is listed in the [root README](../README.md). The discovery baseline is source commit `733b2c627e5aec39cb33cc22373bdce33053ef2c`.
 
-The loader mirrors [`ConfigPaths.directories`](https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/config/paths.ts). It visits:
+The loader mirrors [`ConfigPaths.directories`](https://github.com/anomalyco/opencode/blob/733b2c627e5aec39cb33cc22373bdce33053ef2c/packages/opencode/src/config/paths.ts). It visits:
 
 1. The global XDG OpenCode config directory (`~/.config/opencode` without an absolute `XDG_CONFIG_HOME`).
 2. Existing `.opencode` directories, nearest opened directory first, ascending through the worktree. Non-Git projects ascend to the filesystem root.
@@ -11,7 +11,7 @@ The loader mirrors [`ConfigPaths.directories`](https://github.com/anomalyco/open
 
 Duplicate directory paths retain their first occurrence. Each directory contributes `prompts/` and optional `prompt-composer.jsonc`. Later roots win filename collisions, including nested names such as `review/findings.md`. In particular, the pinned host's directory ordering is **not** a nearest-project-always-wins rule. A worktree-root `.opencode` overrides a descendant `.opencode`; home `.opencode` and the custom host config directory follow project directories.
 
-This matches [agent](https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/config/agent.ts) and command directory precedence, not every skill-specific discovery source. There is no scanning of `.agents`, `.claude`, remote skill URLs, or arbitrary configured skill paths for prompt files. OpenCode has no generic prompt registry; this package owns discovery. Native component definitions remain OpenCode's responsibility.
+This matches [agent](https://github.com/anomalyco/opencode/blob/733b2c627e5aec39cb33cc22373bdce33053ef2c/packages/opencode/src/config/agent.ts) and command directory precedence, not every skill-specific discovery source. There is no scanning of `.agents`, `.claude`, remote skill URLs, or arbitrary configured skill paths for prompt files. OpenCode has no generic prompt registry; this package owns discovery. Native component definitions remain OpenCode's responsibility.
 
 References are forward-slash relative filenames, including the extension. Nested references are registry-relative, not relative to the including file. `.md` and `.txt` remain distinct names. No frontmatter name overrides are interpreted in snippets; their content is plain text.
 
