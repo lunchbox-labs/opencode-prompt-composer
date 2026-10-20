@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { test } from "node:test";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import {
   exerciseConfigEditor,
   exercisePromptEditor,
@@ -24,11 +25,16 @@ import { readState } from "../src/runtime-state.ts";
 const execute = promisify(execFile);
 const npm = process.env.npm_execpath;
 assert.ok(npm !== undefined, "Run native tests through npm");
-const version = "1.18.34";
+const version = process.env.OPENCODE_TEST_VERSION ?? "1.19.0";
+assert.match(
+  version,
+  /^1\.19\.\d+$/,
+  "Native baseline must be an exact supported patch",
+);
 
 test(
-  "installed native hooks preserve authored files, reload, discover overrides and compose on-demand skills",
-  { timeout: 240_000 },
+  "npm-registered native hooks preserve authored files, reload, discover overrides and compose on-demand skills",
+  { timeout: 360_000 },
   async (t) => {
     const root = await realpath(
       await mkdtemp(join(tmpdir(), "prompt-native-")),
@@ -64,6 +70,9 @@ test(
       }
     }
     Object.assign(env, {
+      HOME: join(root, "home"),
+      USERPROFILE: join(root, "home"),
+      npm_config_cache: join(root, "npm-cache"),
       XDG_CONFIG_HOME: join(root, "config"),
       XDG_DATA_HOME: join(root, "data"),
       XDG_STATE_HOME: join(root, "state"),
@@ -77,6 +86,13 @@ test(
       NO_PROXY: "localhost,127.0.0.1,::1",
       no_proxy: "localhost,127.0.0.1,::1",
     });
+    await mkdir(join(root, "home"), { recursive: true });
+    const installEnv = {
+      ...process.env,
+      HOME: env.HOME,
+      USERPROFILE: env.USERPROFILE,
+      npm_config_cache: env.npm_config_cache,
+    };
     let binary = process.env.OPENCODE_BIN;
     if (binary === undefined) {
       const name =
@@ -94,7 +110,7 @@ test(
           "--no-fund",
           `${name}@${version}`,
         ],
-        { timeout: 120_000, signal: t.signal },
+        { env: installEnv, timeout: 120_000, signal: t.signal },
       );
       binary = join(
         root,
@@ -117,7 +133,7 @@ test(
     const packed = await execute(
       process.execPath,
       [npm, "pack", "--ignore-scripts", "--json", "--pack-destination", root],
-      { cwd: resolve("."), timeout: 60_000, signal: t.signal },
+      { cwd: resolve("."), env: installEnv, timeout: 60_000, signal: t.signal },
     );
     const [{ filename }] = JSON.parse(packed.stdout) as { filename: string }[];
     const install = join(root, "installed");
@@ -133,7 +149,7 @@ test(
         "--no-fund",
         join(root, filename),
       ],
-      { timeout: 120_000, signal: t.signal },
+      { env: installEnv, timeout: 120_000, signal: t.signal },
     );
     const plugin = join(
       install,
@@ -184,8 +200,16 @@ test(
       },
     });
     await writeFile(settingsPath, settingsText);
+    const tarball = await readFile(join(root, filename));
+    let tarballRequests = 0;
     const received: string[] = [];
     const modelServer = createServer((request, response) => {
+      if (request.url === "/plugin.tgz") {
+        tarballRequests++;
+        response.writeHead(200, { "Content-Type": "application/octet-stream" });
+        response.end(tarball);
+        return;
+      }
       let text = "";
       request.on("data", (chunk: Buffer) => {
         text += chunk.toString();
@@ -231,8 +255,13 @@ test(
     const address = modelServer.address();
     assert.ok(address !== null && typeof address !== "string");
     const configPlugin = process.env.CONFIG_COMPOSER_DIR;
+    // A remote tarball is an npm spec, not a file entry: the real native
+    // installer, package exports and engines.opencode gate all run here.
+    const npmPlugin = `http://127.0.0.1:${address.port}/plugin.tgz`;
     const plugins =
-      configPlugin === undefined ? [plugin] : [configPlugin, plugin];
+      configPlugin === undefined
+        ? [[npmPlugin, {}]]
+        : [configPlugin, [npmPlugin, {}]];
     await writeFile(
       join(shared, "opencode.jsonc"),
       JSON.stringify({
@@ -299,7 +328,7 @@ test(
           "--save-exact",
           `@opencode-ai/plugin@${version}`,
         ],
-        { cwd: directory, timeout: 120_000, signal: t.signal },
+        { cwd: directory, env: installEnv, timeout: 120_000, signal: t.signal },
       );
     }
     t.signal.throwIfAborted();
@@ -412,6 +441,10 @@ test(
       }
       throw new Error(`No fresh prompt runtime after disposal.\n${logs}`);
     }
+    assert.ok(
+      tarballRequests > 0,
+      "Native npm loader must fetch the packed candidate",
+    );
     assert.equal(
       config.agent.review.prompt,
       "Use evidence.\n\nReview Project evidence\n\nState uncertainty.",
@@ -542,5 +575,34 @@ test(
     assert.equal(await readFile(helperPath, "utf8"), helperText);
     assert.equal(await readFile(agentPath, "utf8"), commandOnlyAgentText);
     assert.equal(await readFile(settingsPath, "utf8"), "{}");
+    // Native terminal registration is distinct from the rendering-replaced editor
+    // checks above. Windows still runs the npm server/editor/reload suite.
+    if (process.platform === "linux") {
+      await writeFile(
+        join(shared, "tui.jsonc"),
+        JSON.stringify({ plugin: [npmPlugin] }),
+      );
+      await writeFile(agentPath, agentText);
+      await writeFile(settingsPath, settingsText);
+      await stopHost();
+      const terminal = await execute(
+        "python3",
+        [
+          fileURLToPath(new URL("./native-tui.py", import.meta.url)),
+          binary,
+          project,
+        ],
+        {
+          env: { ...env, TERM: "xterm-256color", COLORTERM: "truecolor" },
+          timeout: 130_000,
+          signal: t.signal,
+          maxBuffer: 1_000_000,
+        },
+      );
+      assert.match(
+        terminal.stdout,
+        /native npm TUI rendered Prompt Composer and composed preview/,
+      );
+    }
   },
 );

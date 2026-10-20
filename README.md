@@ -2,7 +2,7 @@
 
 Share prompt text across native OpenCode agents, commands and skills. Include reusable files where they belong in a body, or prepend and append guidance to named agents without changing their authored prompts.
 
-Package: **`@lunchbox-labs/opencode-prompt-composer`**. Tested host: **OpenCode 1.18.34**, Node **22.18+**. Independently maintained; not affiliated with OpenCode or Anomaly.
+Package: **`@lunchbox-labs/opencode-prompt-composer`**. Supported host: **OpenCode 1.19.x** (all patches, starting at 1.19.0). Native test baseline: **1.19.0**; CI also tests **1.19.3**, Node **22.18+**. Independently maintained; not affiliated with OpenCode or Anomaly.
 
 ## Include reusable text
 
@@ -74,3 +74,9 @@ The editor checks the server filesystem and rejects stale settings or changed in
 `npm run check`, `npm run test:package`, and `npm run test:native` cover source checks, packed installation, and real OpenCode behavior. Native tests use an isolated local model fixture and no provider account. CI runs on Linux and Windows, both standalone and with Config Composer first, using the compatibility fix from #82. Pull requests and ordinary pushes do not publish packages.
 
 Maintainers: [release workflow setup](docs/publishing.md) covers the initial manual release and later npm trusted publishing.
+
+### Compatibility checks
+
+`engines.opencode` admits every stable 1.19 patch and excludes earlier/later minors. Exact SDK/toolchain pins are build dependencies, independent of this host support range. Run `npm run test:native` for the exact 1.19.0 baseline, or set `OPENCODE_TEST_VERSION=1.19.3` to test that patch. The native server suite serves the packed candidate as an npm tarball spec, exercising the real installer, export resolution and host compatibility gate before includes, skill expansion and reload checks. Its editor checks replace terminal rendering. On Linux, an additional real PTY test registers the packed npm spec in `tui.jsonc`, opens `/compose-prompts`, and checks composed prompt preview. Windows runs the native server/editor/reload checks; real Windows terminal interaction is not covered.
+
+Prompt Composer does not install global help skills. The skill in `docs/examples/skill-guidance` is a project example; open that example project to discover it.
