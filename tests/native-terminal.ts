@@ -265,11 +265,25 @@ export async function exerciseNativeTerminal(options: {
       "highlighted preview option",
     );
     terminal.write("\r");
-    await terminal.wait(
-      "Effective prompts",
-      "Review Project updated",
-      "State uncertainty.",
-    );
+    await terminal.wait("Effective prompts", "Agent: review");
+    for (const label of ["Agent: review", "Page 1 of 1"]) {
+      await terminal.waitFor(
+        terminal.focused,
+        "focused preview chooser search",
+      );
+      terminal.write(`\x15${label}`);
+      await terminal.waitFor(
+        () => terminal.selected(label, label),
+        `highlighted ${label} option`,
+      );
+      terminal.write("\r");
+      await terminal.wait(
+        label === "Agent: review"
+          ? "Agent: review — pages"
+          : "Agent: review — page 1/1",
+      );
+    }
+    await terminal.wait("Review Project updated", "State uncertainty.");
   } finally {
     await terminal.stop();
   }
