@@ -82,6 +82,18 @@ test(
       NO_PROXY: "localhost,127.0.0.1,::1",
       no_proxy: "localhost,127.0.0.1,::1",
     });
+    // The in-process TUI fixture must use the same discovery environment as the host.
+    for (const key of ["XDG_CONFIG_HOME", "OPENCODE_TEST_HOME"]) {
+      const previous = process.env[key];
+      process.env[key] = env[key];
+      t.after(() => {
+        if (previous === undefined) {
+          Reflect.deleteProperty(process.env, key);
+        } else {
+          process.env[key] = previous;
+        }
+      });
+    }
     await mkdir(join(root, "home"), { recursive: true });
     const installEnv = {
       ...process.env,
