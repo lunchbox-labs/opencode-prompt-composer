@@ -22,6 +22,8 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+          cache: npm
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm run check
       - run: npm run test:package
@@ -45,6 +47,8 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+          cache: npm
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - name: Check out config-only compatibility baseline
         if: matrix.composition != 'standalone'
