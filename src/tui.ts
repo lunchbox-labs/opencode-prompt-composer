@@ -7,6 +7,7 @@ import { verifySharedFilesystem } from "./connection.ts";
 import { SettingsError } from "./errors.ts";
 import { type EditPlan, editSetting, planEdits, savePlan } from "./editor.ts";
 import { compose } from "./runtime.ts";
+import { previewPages } from "./preview.ts";
 import { fingerprint, readState } from "./runtime-state.ts";
 import { loadSettings } from "./settings.ts";
 import { projectDiscoveryEnabled } from "./discovery.ts";
@@ -81,6 +82,100 @@ const PromptComposerTui: TuiPlugin = (api) => {
         "The OpenCode connection or project changed. Reopen the prompt editor.",
       );
     }
+  };
+  const preview = (snapshot: Snapshot) => {
+    const entries = [
+      ...Object.entries(snapshot.current.config.agent ?? {}).map(
+        ([name, agent]) => {
+          const fallback =
+            agent?.prompt === undefined || agent.prompt.trim() === "";
+          const labels = [
+            agent?.disable === true ? "disabled" : "",
+            fallback ? "native fallback" : "",
+          ].filter(Boolean);
+          return {
+            title: `Agent: ${name}${labels.length > 0 ? ` (${labels.join(", ")})` : ""}`,
+            value: `agent:${name}`,
+            text: fallback
+              ? "(native fallback — no configured prompt text)"
+              : (agent.prompt ?? ""),
+          };
+        },
+      ),
+      ...Object.entries(snapshot.current.config.command ?? {}).map(
+        ([name, command]) => ({
+          title: `Command: ${name}`,
+          value: `command:${name}`,
+          text: command.template,
+        }),
+      ),
+      ...(snapshot.current.diagnostics.length > 0
+        ? [
+            {
+              title: "Composition notices",
+              value: "notices",
+              text: snapshot.current.diagnostics
+                .map((item) => item.message)
+                .join("\n\n"),
+            },
+          ]
+        : []),
+    ];
+    // Rebind callbacks when Back restores a view; retired callbacks cannot reopen it.
+    const menu = (
+      title: string,
+      options: { title: string; value: string }[],
+      select: (value: string) => void,
+    ) => {
+      let check = () => false;
+      const render = navigation.select({
+        title,
+        options,
+        onSelect: (selected) => {
+          if (!check()) {
+            return;
+          }
+          run(() => {
+            if (!check()) {
+              return;
+            }
+            assertCurrent(snapshot);
+            select(selected.value);
+          });
+        },
+      });
+      navigation.show(() => {
+        check = navigation.checkpoint();
+        return render();
+      });
+    };
+    menu(
+      "Effective prompts",
+      entries.length > 0
+        ? entries
+        : [{ title: "No configured agent or command text", value: "empty" }],
+      (value) => {
+        const entry = entries.find((item) => item.value === value);
+        if (entry === undefined) {
+          return;
+        }
+        const pages = previewPages(entry.text);
+        menu(
+          `${entry.title} — pages`,
+          pages.map((_, index) => ({
+            title: `Page ${index + 1} of ${pages.length}`,
+            value: String(index),
+          })),
+          (value) => {
+            const index = Number(value);
+            navigation.alert({
+              title: `${entry.title} — page ${index + 1}/${pages.length}`,
+              message: pages[index] === "" ? "(empty text)" : pages[index],
+            });
+          },
+        );
+      },
+    );
   };
   let readingFiles = false;
   const readFiles = (show: (snapshot: Snapshot) => void, origin?: Snapshot) => {
@@ -394,28 +489,34 @@ const PromptComposerTui: TuiPlugin = (api) => {
             readFiles(promptFiles);
             return;
           }
+          const check = navigation.checkpoint();
           run(async () => {
+            if (!check()) {
+              return;
+            }
             if (selected.value === "apply") {
               await apply();
               return;
             }
-            const snapshot = await load();
+            let snapshot: Snapshot;
+            try {
+              snapshot = await load();
+            } catch (error) {
+              if (!check()) {
+                return;
+              }
+              throw error;
+            }
+            if (!check()) {
+              return;
+            }
             assertCurrent(snapshot);
             switch (selected.value) {
               case "edit":
                 sources(snapshot, apply);
                 break;
               case "preview":
-                navigation.alert({
-                  title: "Effective prompts",
-                  message: [
-                    ...Object.entries(snapshot.current.config.agent ?? {}).map(
-                      ([name, agent]) =>
-                        `${name}:\n${agent?.prompt?.slice(0, 2400) ?? "(native fallback)"}`,
-                    ),
-                    ...snapshot.current.diagnostics.map((item) => item.message),
-                  ].join("\n\n"),
-                });
+                preview(snapshot);
                 break;
             }
           });
