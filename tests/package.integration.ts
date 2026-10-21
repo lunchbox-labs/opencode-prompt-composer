@@ -27,7 +27,21 @@ test(
     }[];
     assert.ok(files.some((file) => file.path === "dist/server.d.ts"));
     assert.ok(files.some((file) => file.path === "LICENSE"));
-    assert.ok(files.some((file) => file.path === "docs/discovery.md"));
+    for (const path of [
+      "README.md",
+      "docs/examples/review/.opencode/agents/review.md",
+      "docs/examples/review/.opencode/commands/check.md",
+      "docs/examples/review/.opencode/prompt-composer.jsonc",
+      "docs/examples/review/.opencode/prompts/review/context.md",
+      "docs/examples/review/.opencode/prompts/review/findings.md",
+      "docs/examples/skill-guidance/.opencode/skills/verification/SKILL.md",
+      "docs/examples/skill-guidance/.opencode/prompts/verification.md",
+    ]) {
+      assert.ok(
+        files.some((file) => file.path === path),
+        `Missing ${path}`,
+      );
+    }
     assert.ok(!files.some((file) => file.path.startsWith("tests/")));
     await execute(
       process.execPath,
