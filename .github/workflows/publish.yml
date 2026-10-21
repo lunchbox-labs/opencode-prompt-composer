@@ -1,4 +1,4 @@
-name: Publish @lunchbox-labs/opencode-prompt-composer
+name: Publish
 on:
   workflow_dispatch:
 
@@ -10,62 +10,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare:
+  verify:
+    name: Verify package and source
     if: >-
       github.repository == 'lunchbox-labs/opencode-prompt-composer' &&
       github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    environment: release
-    permissions:
-      contents: read
-    env:
-      RELEASE_COMMIT: ${{ github.sha }}
+    timeout-minutes: 15
     outputs:
       access: ${{ steps.release.outputs.access }}
       name: ${{ steps.release.outputs.name }}
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          ref: ${{ github.workflow_sha }}
-          persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: '24'
-          package-manager-cache: false
-      - name: Validate the intended source and release metadata
-        id: release
-        run: |
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          export RELEASE_TAG="v$(node -p "require('./package.json').version")"
-          node scripts/validate-release.mjs
-          printf 'tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
-      - name: Mint repository-scoped release App token
-        id: app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.LUNCHBOX_LABS_APP_CLIENT_ID }}
-          private-key: ${{ secrets.LUNCHBOX_LABS_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          skip-token-revoke: false
-      - name: Create or reuse the exact tag and draft
-        env:
-          NPM_PACKAGE_NAME: ${{ steps.release.outputs.name }}
-          NPM_PACKAGE_VERSION: ${{ steps.release.outputs.version }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: node scripts/release-lifecycle.mjs prepare
-
-  verify:
-    needs: prepare
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      commit: ${{ github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -82,9 +39,12 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-      - name: Validate release metadata
+      - name: Validate the intended source and release metadata
         id: release
-        run: node scripts/validate-release.mjs
+        run: |
+          export RELEASE_TAG="v$(node -p "require('./package.json').version")"
+          node scripts/validate-release.mjs
+          printf 'tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
       - run: npm ci
       - run: npm run check
       - run: npm run test:package
@@ -104,8 +64,45 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  prepare:
+    name: Prepare ${{ needs.verify.outputs.tag }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Mint repository-scoped release App token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.LUNCHBOX_LABS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.LUNCHBOX_LABS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          skip-token-revoke: false
+      - name: Create or reuse the exact tag and draft
+        env:
+          NPM_PACKAGE_NAME: ${{ needs.verify.outputs.name }}
+          NPM_PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node scripts/release-lifecycle.mjs prepare
+
   publish:
-    needs: [prepare, verify]
+    name: Publish npm ${{ needs.verify.outputs.tag }}
+    needs: [verify, prepare]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment: npm
@@ -130,11 +127,11 @@ jobs:
         run: npm install --global npm@11.9.0 --ignore-scripts --no-audit --no-fund
       - name: Publish npm or verify an identical existing version
         env:
-          NPM_PACKAGE_NAME: ${{ needs.prepare.outputs.name }}
-          NPM_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
-          NPM_ACCESS: ${{ needs.prepare.outputs.access }}
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-          RELEASE_COMMIT: ${{ github.sha }}
+          NPM_PACKAGE_NAME: ${{ needs.verify.outputs.name }}
+          NPM_PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
+          NPM_ACCESS: ${{ needs.verify.outputs.access }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
           GH_TOKEN: ${{ github.token }}
           NPM_CONFIG_PROVENANCE: 'true'
         run: |
@@ -142,7 +139,8 @@ jobs:
           node scripts/release-lifecycle.mjs npm
 
   finish:
-    needs: [prepare, verify, publish]
+    name: Publish GitHub ${{ needs.verify.outputs.tag }}
+    needs: [verify, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment: release
@@ -176,9 +174,9 @@ jobs:
           skip-token-revoke: false
       - name: Verify npm bytes, attach the archive and publish the draft
         env:
-          NPM_PACKAGE_NAME: ${{ needs.prepare.outputs.name }}
-          NPM_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-          RELEASE_COMMIT: ${{ github.sha }}
+          NPM_PACKAGE_NAME: ${{ needs.verify.outputs.name }}
+          NPM_PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: node scripts/release-lifecycle.mjs finish

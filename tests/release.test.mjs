@@ -75,45 +75,107 @@ test("release validation rejects private, provisional, mismatched, prerelease, a
   }
 });
 
-test("manual lifecycle isolates permissions and gates publication on verified artifacts", async () => {
+test("verification gates every release mutation and supplies pinned metadata to all later jobs", async () => {
   const { readFile } = await import("node:fs/promises");
-  const workflow = await readFile(
-    new URL("../.github/workflows/publish.yml", import.meta.url),
-    "utf8",
+  const { parse } = await import("yaml");
+  const workflow = parse(
+    await readFile(
+      new URL("../.github/workflows/publish.yml", import.meta.url),
+      "utf8",
+    ),
   );
-  assert.doesNotMatch(workflow, /^ {2}release:/m);
-  assert.match(workflow, /^ {2}workflow_dispatch:/m);
-  assert.doesNotMatch(workflow, /inputs:/);
-  const jobs = workflow.split(/(?=^ {2}\w+:)/m);
-  const prepare = jobs.find((job) => job.startsWith("  prepare:\n"));
-  const verify = jobs.find((job) => job.startsWith("  verify:\n"));
-  const publish = jobs.find((job) => job.startsWith("  publish:\n"));
-  const finish = jobs.find((job) => job.startsWith("  finish:\n"));
-  assert.ok(prepare && verify && publish && finish);
-  assert.match(prepare, /github\.ref == 'refs\/heads\/main'/);
-  assert.match(prepare, /permissions:\n {6}contents: read/);
-  assert.doesNotMatch(prepare, /id-token: write/);
-  assert.match(prepare, /node scripts\/validate-release\.mjs/);
-  assert.match(prepare, /node scripts\/release-lifecycle\.mjs prepare/);
-  assert.match(verify, /needs: prepare/);
-  assert.doesNotMatch(verify, /contents: write|id-token: write/);
-  assert.match(verify, /cmp release\/\*\.tgz release-repack\/\*\.tgz/);
-  assert.match(publish, /needs: \[prepare, verify\]/);
-  assert.match(publish, /contents: read/);
-  assert.match(publish, /id-token: write/);
-  assert.match(publish, /node scripts\/release-lifecycle\.mjs npm/);
-  assert.match(finish, /needs: \[prepare, verify, publish\]/);
-  assert.match(finish, /permissions:\n {6}contents: read/);
-  assert.doesNotMatch(finish, /id-token: write/);
-  assert.match(finish, /node scripts\/release-lifecycle\.mjs finish/);
-  for (const job of [publish, finish]) {
+  assert.equal(workflow.name, "Publish");
+  assert.deepEqual(workflow.on, { workflow_dispatch: null });
+  assert.deepEqual(Object.keys(workflow.jobs), [
+    "verify",
+    "prepare",
+    "publish",
+    "finish",
+  ]);
+  const { verify, prepare, publish, finish } = workflow.jobs;
+  assert.equal(workflow["run-name"], undefined);
+  assert.equal(verify.name, "Verify package and source");
+  assert.equal(prepare.name, "Prepare ${{ needs.verify.outputs.tag }}");
+  assert.equal(publish.name, "Publish npm ${{ needs.verify.outputs.tag }}");
+  assert.equal(finish.name, "Publish GitHub ${{ needs.verify.outputs.tag }}");
+  assert.equal(verify.needs, undefined);
+  assert.equal(verify.environment, undefined);
+  assert.equal(verify.env, undefined);
+  assert.match(verify.if, /github\.ref == 'refs\/heads\/main'/);
+  assert.deepEqual(verify.outputs, {
+    access: "${{ steps.release.outputs.access }}",
+    name: "${{ steps.release.outputs.name }}",
+    version: "${{ steps.release.outputs.version }}",
+    tag: "${{ steps.release.outputs.tag }}",
+    commit: "${{ github.sha }}",
+  });
+  assert.equal(prepare.needs, "verify");
+  assert.equal(prepare.outputs, undefined);
+  assert.deepEqual(publish.needs, ["verify", "prepare"]);
+  assert.deepEqual(finish.needs, ["verify", "publish"]);
+  const source = verify.steps.find((step) =>
+    step.uses?.startsWith("actions/checkout@"),
+  );
+  assert.equal(source.with.ref, "${{ github.sha }}");
+  const metadata = verify.steps.findIndex((step) => step.id === "release");
+  assert.match(verify.steps[metadata].run, /package\.json/);
+  assert.match(
+    verify.steps[metadata].run,
+    /node scripts\/validate-release\.mjs/,
+  );
+  let previous = metadata;
+  for (const command of [
+    "npm ci",
+    "npm run check",
+    "npm run test:package",
+    "npm run test:native",
+  ]) {
+    const index = verify.steps.findIndex((step) => step.run === command);
     assert.ok(
-      job.indexOf("actions/checkout@") <
-        job.indexOf("actions/download-artifact@"),
+      index > previous,
+      `${command} must run after metadata and previous checks`,
     );
-    assert.ok(
-      job.indexOf("sha256sum --check") <
-        job.indexOf("node scripts/release-lifecycle.mjs"),
+    previous = index;
+  }
+  const pack = verify.steps.findIndex((step) =>
+    step.run?.includes("cmp release/*.tgz release-repack/*.tgz"),
+  );
+  assert.ok(pack > previous);
+  assert.ok(
+    verify.steps.findIndex((step) =>
+      step.uses?.startsWith("actions/upload-artifact@"),
+    ) > pack,
+  );
+  for (const [job, stage] of [
+    [prepare, "prepare"],
+    [publish, "npm"],
+    [finish, "finish"],
+  ]) {
+    const operation = job.steps.find((step) =>
+      step.run?.includes(`node scripts/release-lifecycle.mjs ${stage}`),
+    );
+    assert.ok(operation);
+    for (const [key, output] of [
+      ["NPM_PACKAGE_NAME", "name"],
+      ["NPM_PACKAGE_VERSION", "version"],
+      ["RELEASE_TAG", "tag"],
+      ["RELEASE_COMMIT", "commit"],
+    ]) {
+      assert.equal(
+        operation.env[key],
+        "${{ needs.verify.outputs." + output + " }}",
+      );
+    }
+    assert.deepEqual(
+      job.permissions,
+      stage === "npm"
+        ? { contents: "read", "id-token": "write" }
+        : { contents: "read" },
     );
   }
+  assert.equal(publish.environment, "npm");
+  const npm = publish.steps.find((step) =>
+    step.run?.includes("node scripts/release-lifecycle.mjs npm"),
+  );
+  assert.equal(npm.env.NPM_ACCESS, "${{ needs.verify.outputs.access }}");
 });

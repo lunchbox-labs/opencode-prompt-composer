@@ -197,7 +197,7 @@ export async function prepareRelease(options) {
       typeof notes?.name === "string" && typeof notes?.body === "string",
       "invalid generated release notes",
     );
-    await api(
+    const created = await api(
       "/releases",
       "POST",
       {
@@ -210,9 +210,24 @@ export async function prepareRelease(options) {
       },
       true,
     );
-    release = await matchingRelease(options);
+    if (created?.conflictStatus !== undefined) {
+      release = await matchingRelease(options);
+      if (!release) {
+        options.onPhase?.("draft-create");
+        throw new LifecycleHttpError(created.conflictStatus);
+      }
+    } else {
+      release = created;
+      assert.equal(release?.draft, true, "new release must be a draft");
+    }
   }
   assert.ok(release, "matching release is missing");
+  assert.ok(
+    Number.isSafeInteger(release.id) && release.id > 0,
+    "invalid release identity",
+  );
+  assert.equal(release.tag_name, options.tag, "release tag differs");
+  assert.equal(typeof release.draft, "boolean", "invalid release draft state");
   assert.equal(release.prerelease, false, "release must be stable");
   if (release.draft) {
     assert.notEqual(release.immutable, true, "draft must be mutable");
