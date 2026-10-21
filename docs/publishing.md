@@ -9,6 +9,8 @@ The workflow automates the lifecycle:
 3. Publish that archive to npm with OIDC, or skip publication only when the existing version's identity, optional `gitHead`, registry integrity, internal manifest and archive bytes agree with the verified artifact and exact tag commit. A conflicting existing asset blocks npm publication.
 4. Wait through bounded npm propagation delays, verify the exact published registry archive against the artifact, attach it to the draft, and publish the draft only after the asset is verified. GitHub release immutability stays enabled.
 
+Preparation failures report a controlled lifecycle phase and typed HTTP status without response bodies or credentials. A `tag-create` failure with HTTP 403 or 422 can indicate tag-creation rulesets or token permissions; a repository or organization administrator must investigate that policy. The workflow does not change rulesets or credentials.
+
 The npm job receives OIDC through the `npm` environment and read-only GitHub access. Only preparation and finalization receive GitHub `contents: write`. Ordinary pushes, pull requests and GitHub release publication do not publish npm packages.
 
 Configure [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) for this public package:
