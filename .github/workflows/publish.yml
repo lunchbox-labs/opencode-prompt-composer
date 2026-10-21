@@ -16,8 +16,9 @@ jobs:
       github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    environment: release
     permissions:
-      contents: write
+      contents: read
     env:
       RELEASE_COMMIT: ${{ github.sha }}
     outputs:
@@ -41,12 +42,22 @@ jobs:
           export RELEASE_TAG="v$(node -p "require('./package.json').version")"
           node scripts/validate-release.mjs
           printf 'tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - name: Mint repository-scoped release App token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.LUNCHBOX_LABS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.LUNCHBOX_LABS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          skip-token-revoke: false
       - name: Create or reuse the exact tag and draft
         env:
           NPM_PACKAGE_NAME: ${{ steps.release.outputs.name }}
           NPM_PACKAGE_VERSION: ${{ steps.release.outputs.version }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: node scripts/release-lifecycle.mjs prepare
 
   verify:
@@ -134,8 +145,9 @@ jobs:
     needs: [prepare, verify, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    environment: release
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -149,13 +161,24 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Verify the release artifact checksum
+        working-directory: release
+        run: sha256sum --check SHA256SUMS
+      - name: Mint repository-scoped release App token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.LUNCHBOX_LABS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.LUNCHBOX_LABS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          skip-token-revoke: false
       - name: Verify npm bytes, attach the archive and publish the draft
         env:
           NPM_PACKAGE_NAME: ${{ needs.prepare.outputs.name }}
           NPM_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           RELEASE_COMMIT: ${{ github.sha }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          (cd release && sha256sum --check SHA256SUMS)
-          node scripts/release-lifecycle.mjs finish
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node scripts/release-lifecycle.mjs finish

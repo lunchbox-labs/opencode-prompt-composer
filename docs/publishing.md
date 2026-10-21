@@ -11,7 +11,13 @@ The workflow automates the lifecycle:
 
 Preparation failures report a controlled lifecycle phase and typed HTTP status without response bodies or credentials. A `tag-create` failure with HTTP 403 or 422 can indicate tag-creation rulesets or token permissions; a repository or organization administrator must investigate that policy. The workflow does not change rulesets or credentials.
 
-The npm job receives OIDC through the `npm` environment and read-only GitHub access. Only preparation and finalization receive GitHub `contents: write`. Ordinary pushes, pull requests and GitHub release publication do not publish npm packages.
+The npm job receives OIDC through the `npm` environment and uses the normal read-only GitHub token. Preparation and finalization also keep their built-in GitHub tokens read-only; each mints a repository-scoped App token immediately before its release API step, requesting only `Contents: write`. The token action attempts to revoke each token when its job ends. App credentials are not supplied to builds, tests, npm or artifact steps, and tokens are never job outputs. Ordinary pushes, pull requests and GitHub release publication do not publish npm packages.
+
+The App must be installed for this repository, have `Contents: write`, and be permitted by active tag-creation rulesets to create the version tag. `Contents: write` is broader than tag creation; tag rulesets do not make this a tag-only App. Create the repository environment `release` and store the environment secret `LUNCHBOX_LABS_APP_PRIVATE_KEY` there. Keep the action variable `LUNCHBOX_LABS_APP_CLIENT_ID` available to these jobs through the organization or that environment. Both preparation and finalization declare `environment: release`; npm retains its separate `npm` environment. Remove broader organization/repository copies of the private key or remove this repository’s access to them, so a workflow that skips the environment cannot fall back to a broader key. The workflow does not install the App or change credentials and rulesets.
+
+Restrict the `release` environment’s deployment branches to `main` and optionally require reviewers. An environment is not a workflow allowlist: any workflow can request it. Protect `main` and workflow changes, and review environment approval requests; environment protection controls access to the key, while repository workflow permissions and branch protections remain essential.
+
+The organization's allowed-actions policy must permit the official `actions/create-github-app-token` action, pinned here to v3.3.0 at `64ab729a6294000f5aa4a4bc0b73d1f32bc45510`, in addition to the existing checkout, Node setup and artifact actions.
 
 Configure [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) for this public package:
 

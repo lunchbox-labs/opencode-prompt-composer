@@ -91,7 +91,7 @@ test("manual lifecycle isolates permissions and gates publication on verified ar
   const finish = jobs.find((job) => job.startsWith("  finish:\n"));
   assert.ok(prepare && verify && publish && finish);
   assert.match(prepare, /github\.ref == 'refs\/heads\/main'/);
-  assert.match(prepare, /contents: write/);
+  assert.match(prepare, /permissions:\n {6}contents: read/);
   assert.doesNotMatch(prepare, /id-token: write/);
   assert.match(prepare, /node scripts\/validate-release\.mjs/);
   assert.match(prepare, /node scripts\/release-lifecycle\.mjs prepare/);
@@ -103,7 +103,7 @@ test("manual lifecycle isolates permissions and gates publication on verified ar
   assert.match(publish, /id-token: write/);
   assert.match(publish, /node scripts\/release-lifecycle\.mjs npm/);
   assert.match(finish, /needs: \[prepare, verify, publish\]/);
-  assert.match(finish, /contents: write/);
+  assert.match(finish, /permissions:\n {6}contents: read/);
   assert.doesNotMatch(finish, /id-token: write/);
   assert.match(finish, /node scripts\/release-lifecycle\.mjs finish/);
   for (const job of [publish, finish]) {
