@@ -1,11 +1,11 @@
 # Publishing
 
-Run the **Publish @lunchbox-labs/opencode-prompt-composer** workflow manually on `main`. It derives the stable version from `package.json` and checks the lockfile and repository metadata. There is no tag input and no separate draft-publication step.
+Run the **Publish** workflow manually on `main`. It derives the stable version from `package.json` and checks the lockfile and repository metadata. There is no tag input and no separate draft-publication step. After verification, the preparation, npm publication and GitHub publication job labels show the tag derived from `package.json`. The overall workflow run title remains static; no second version setting is needed.
 
 The workflow automates the lifecycle:
 
-1. Validate the intended main commit and create or reuse its exact `vX.Y.Z` tag and matching draft release. Existing tags are never moved. A user-created draft targeting `main` can be reused when it resolves to the intended commit. New drafts use the title and body returned by GitHub’s automatic release-notes generator for that tag and commit. Existing draft titles and bodies are preserved, including when another actor creates the draft concurrently.
-2. Run checks plus packed-install and native tests, then pack the verified build twice and require identical archives. Store the checksummed archive as a workflow artifact.
+1. Validate the intended main commit and release metadata, then run checks plus packed-install and native tests, then pack the verified build twice and require identical archives. Store the checksummed archive as a workflow artifact.
+2. After verification succeeds, create or reuse its exact `vX.Y.Z` tag and matching draft release. Existing tags are never moved. A user-created draft targeting `main` can be reused when it resolves to the intended commit. New drafts use the title and body returned by GitHub’s automatic release-notes generator for that tag and commit. Existing draft titles and bodies are preserved, including when another actor creates the draft concurrently.
 3. Publish that archive to npm with OIDC, or skip publication only when the existing version's identity, optional `gitHead`, registry integrity, internal manifest and archive bytes agree with the verified artifact and exact tag commit. A conflicting existing asset blocks npm publication.
 4. Wait through bounded npm propagation delays, verify the exact published registry archive against the artifact, attach it to the draft, and publish the draft only after the asset is verified. GitHub release immutability stays enabled.
 
