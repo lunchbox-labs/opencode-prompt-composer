@@ -25,5 +25,3 @@ OpenCode selects the server and TUI entrypoints.
 - [Extraction provenance](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Extraction-provenance)
 
 Runnable example projects remain under `docs/examples/`, including their native definitions, skills and prompt includes. Setup instructions are in the wiki examples above.
-
-Maintainers: [release workflow setup](docs/publishing.md) covers the initial manual release and later npm trusted publishing.
