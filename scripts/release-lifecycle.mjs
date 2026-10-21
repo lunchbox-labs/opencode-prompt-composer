@@ -12,6 +12,13 @@ import {
   preflightDraftRelease,
 } from "./attach-published-tarball.mjs";
 
+class LifecycleHttpError extends Error {
+  constructor(status) {
+    super(`GitHub request failed (HTTP ${status})`);
+    this.status = status;
+  }
+}
+
 function client(options) {
   const {
     repository,
@@ -42,6 +49,20 @@ function client(options) {
   );
   assert.ok(token, "GitHub token required");
   return async (path, method = "GET", body, allowConflict = false) => {
+    const phase = path.startsWith("/commits/")
+      ? "commit"
+      : path.startsWith("/compare/")
+        ? "main"
+        : path === "/git/refs" && method === "POST"
+          ? "tag-create"
+          : path.startsWith("/git/")
+            ? "tag"
+            : path === "/releases/generate-notes"
+              ? "notes"
+              : method === "POST" && path === "/releases"
+                ? "draft-create"
+                : "release";
+    options.onPhase?.(phase);
     const response = await request(`${api}/repos/${repository}${path}`, {
       method,
       redirect: "error",
@@ -59,9 +80,11 @@ function client(options) {
     }
     if (allowConflict && [409, 422].includes(response.status)) {
       await response.body?.cancel();
-      return undefined;
+      return { conflictStatus: response.status };
     }
-    assert.ok(response.ok, `GitHub ${method} failed (HTTP ${response.status})`);
+    if (!response.ok) {
+      throw new LifecycleHttpError(response.status);
+    }
     return response.json();
   };
 }
@@ -70,13 +93,17 @@ async function exactTag(options, create = false) {
   const api = client(options);
   let ref = await api(`/git/ref/tags/${encodeURIComponent(options.tag)}`);
   if (!ref && create) {
-    await api(
+    const creation = await api(
       "/git/refs",
       "POST",
       { ref: `refs/tags/${options.tag}`, sha: options.commit },
       true,
     );
     ref = await api(`/git/ref/tags/${encodeURIComponent(options.tag)}`);
+    if (!ref && creation?.conflictStatus) {
+      options.onPhase?.("tag-create");
+      throw new LifecycleHttpError(creation.conflictStatus);
+    }
   }
   assert.ok(ref, "release tag is missing");
   let object = ref.object;
@@ -125,6 +152,7 @@ export async function prepareRelease(options) {
   if (!release || !existingTag) {
     const request = options.fetch ?? globalThis.fetch;
     const registry = options.registry ?? "https://registry.npmjs.org";
+    options.onPhase?.("registry");
     const response = await request(
       `${registry}/${encodeURIComponent(options.name)}/${options.version}`,
       {
@@ -363,10 +391,50 @@ export async function finishRelease(options) {
   return result;
 }
 
+export function lifecycleFailureMessage(stage, phase, error) {
+  const safeStage = ["prepare", "npm", "finish"].includes(stage)
+    ? stage
+    : "configuration";
+  const safePhase = [
+    "configuration",
+    "commit",
+    "main",
+    "tag",
+    "tag-create",
+    "notes",
+    "draft-create",
+    "release",
+    "registry",
+  ].includes(phase)
+    ? phase
+    : "operation";
+  const status =
+    error instanceof LifecycleHttpError &&
+    Number.isInteger(error.status) &&
+    error.status >= 400 &&
+    error.status <= 599
+      ? error.status
+      : undefined;
+  const code = status
+    ? "http"
+    : error instanceof assert.AssertionError
+      ? "validation"
+      : "request";
+  const hint =
+    safePhase === "tag-create" && status
+      ? " Check tag-creation rulesets and workflow token permissions."
+      : "";
+  return `Release lifecycle ${safeStage} failed: phase=${safePhase} code=${code}${status ? ` status=${status}` : ""}; no response details logged.${hint}`;
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const stage = process.argv[2];
+  let phase = "configuration";
   try {
     const options = {
+      onPhase: (value) => {
+        phase = value;
+      },
       name: process.env.NPM_PACKAGE_NAME,
       version: process.env.NPM_PACKAGE_VERSION,
       tag: process.env.RELEASE_TAG,
@@ -390,10 +458,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     assert.ok(operation, "invalid lifecycle stage");
     const result = await operation(options);
     console.log(`Release ${stage}: ${result.action}.`);
-  } catch {
-    console.error(
-      `Release lifecycle ${["prepare", "npm", "finish"].includes(stage) ? stage : "configuration"} failed; no response details logged.`,
-    );
+  } catch (error) {
+    console.error(lifecycleFailureMessage(stage, phase, error));
     process.exitCode = 1;
   }
 }
