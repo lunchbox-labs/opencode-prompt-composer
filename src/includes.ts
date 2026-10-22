@@ -33,8 +33,8 @@ interface IncludeFrame {
 
 class IncludeError extends SettingsError {}
 
-function promptSize(text: string): void {
-  if (Buffer.byteLength(text, "utf8") > MAX_PROMPT_BYTES) {
+function promptSize(bytes: number): void {
+  if (bytes > MAX_PROMPT_BYTES) {
     throw new SettingsError("The composed prompt exceeds the 256 KiB limit.");
   }
 }
@@ -158,16 +158,36 @@ async function expand(
   let position = 0;
   let reference: string | undefined;
   try {
-    promptSize(text);
+    promptSize(Buffer.byteLength(text, "utf8"));
     let result = "";
+    let resultBytes = 0;
+    let lastCodeUnit = 0;
+    const append = (chunk: string): void => {
+      if (chunk.length === 0) {
+        return;
+      }
+      resultBytes += Buffer.byteLength(chunk, "utf8");
+      const firstCodeUnit = chunk.charCodeAt(0);
+      // Joined surrogates encode as four bytes, not two three-byte replacements.
+      if (
+        lastCodeUnit >= 0xd800 &&
+        lastCodeUnit <= 0xdbff &&
+        firstCodeUnit >= 0xdc00 &&
+        firstCodeUnit <= 0xdfff
+      ) {
+        resultBytes -= 2;
+      }
+      lastCodeUnit = chunk.charCodeAt(chunk.length - 1);
+      result += chunk;
+    };
     let cursor = 0;
     for (const match of text.matchAll(INCLUDE)) {
-      result += text.slice(cursor, match.index);
+      append(text.slice(cursor, match.index));
       position = match.index;
       reference = undefined;
       const marker = match[0];
       if (marker.startsWith("\\")) {
-        result += marker.slice(1);
+        append(marker.slice(1));
       } else {
         reference = match.at(1);
         if (reference === undefined) {
@@ -190,18 +210,20 @@ async function expand(
             "The prompt includes contain a cycle. Remove the recursive include.",
           );
         }
-        result += await expand(
-          included.text,
-          context,
-          [...stack, { path: included.path, reference }],
-          included,
+        append(
+          await expand(
+            included.text,
+            context,
+            [...stack, { path: included.path, reference }],
+            included,
+          ),
         );
       }
-      promptSize(result);
+      promptSize(resultBytes);
       cursor = match.index + marker.length;
     }
-    result += text.slice(cursor);
-    promptSize(result);
+    append(text.slice(cursor));
+    promptSize(resultBytes);
     return result;
   } catch (error) {
     if (!(error instanceof SettingsError) || error instanceof IncludeError) {
