@@ -720,6 +720,7 @@ test(
     let expectedSkill = "";
     let expectedNested = "";
     let expectedGlobal = "";
+    let expectedProject = "";
     let terminalModelRequests = 0;
     await exerciseNativeTerminal({
       binary,
@@ -767,6 +768,16 @@ test(
         globalConfig.default_agent = "build";
         expectedGlobal = JSON.stringify(globalConfig);
         await writeFile(globalPath, expectedGlobal);
+        // Project JSON is reread on instance load, unlike ordinary global JSON.
+        expectedProject = JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          command: {
+            project_json: {
+              template: `${stage} JSON {{include:review/body.md}}`,
+            },
+          },
+        });
+        await writeFile(join(project, "opencode.jsonc"), expectedProject);
       },
       async verifyReload(stage) {
         assert.equal(
@@ -807,6 +818,11 @@ test(
           loaded.default_agent,
           "review",
           "Current-instance disposal does not invalidate process-cached global JSON",
+        );
+        assert.equal(
+          loaded.command.project_json.template,
+          `${stage} JSON Project ${stage}`,
+          "Current-instance reload rereads and composes added or edited project JSON",
         );
         const commands = (await api("/command")) as {
           name: string;
@@ -875,6 +891,10 @@ test(
         assert.equal(
           await readFile(join(shared, "opencode.jsonc"), "utf8"),
           expectedGlobal,
+        );
+        assert.equal(
+          await readFile(join(project, "opencode.jsonc"), "utf8"),
+          expectedProject,
         );
         assert.equal(await readFile(helperPath, "utf8"), helperText);
         assert.equal(await readFile(obsoletePath, "utf8"), obsoleteText);
