@@ -11,7 +11,7 @@ const npm = process.env.npm_execpath;
 assert.ok(npm !== undefined, "Run package tests through npm");
 
 test(
-  "packed plugin installs independently and exposes working runtime, schema and declarations",
+  "packed plugin installs independently and exposes working include-only runtime and declarations",
   { timeout: 180_000 },
   async (t) => {
     const root = await mkdtemp(join(tmpdir(), "prompt-package-"));
@@ -28,6 +28,7 @@ test(
     assert.ok(files.some((file) => file.path === "dist/server.d.ts"));
     assert.ok(files.some((file) => file.path === "LICENSE"));
     for (const removed of [
+      "settings",
       "editor",
       "connection",
       "filesystem",
@@ -45,7 +46,6 @@ test(
       "README.md",
       "docs/examples/review/.opencode/agents/review.md",
       "docs/examples/review/.opencode/commands/check.md",
-      "docs/examples/review/.opencode/prompt-composer.jsonc",
       "docs/examples/review/.opencode/prompts/review/context.md",
       "docs/examples/review/.opencode/prompts/review/findings.md",
       "docs/examples/skill-guidance/.opencode/skills/verification/SKILL.md",
@@ -57,6 +57,13 @@ test(
       );
     }
     assert.ok(!files.some((file) => file.path.startsWith("tests/")));
+    assert.ok(
+      !files.some(
+        (file) =>
+          file.path.endsWith("schema.json") ||
+          file.path.endsWith("prompt-composer.jsonc"),
+      ),
+    );
     await execute(
       process.execPath,
       [
@@ -84,10 +91,10 @@ test(
       `import assert from 'node:assert/strict';
 import plugin from '@lunchbox-labs/opencode-prompt-composer';
 import tui from '@lunchbox-labs/opencode-prompt-composer/tui';
-import schema from '@lunchbox-labs/opencode-prompt-composer/schema.json' with { type: 'json' };
 assert.equal(tui.id, 'prompt-composer');
-assert.equal(schema.additionalProperties, false);
-await assert.rejects(import('@lunchbox-labs/opencode-prompt-composer/editor'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+for (const name of ['editor', 'settings', 'schema.json']) {
+  await assert.rejects(import('@lunchbox-labs/opencode-prompt-composer/' + name), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+}
 const hooks = await plugin.server({ directory: process.argv[2], worktree: process.argv[2] });
 const config = { agent: { review: { prompt: '{{include:rules.md}}' } } };
 await hooks.config(config);
@@ -134,6 +141,7 @@ console.log(id);
         "utf8",
       ),
     ) as Record<string, Record<string, string> | undefined>;
+    assert.deepEqual(manifest.dependencies ?? {}, {});
     assert.equal(Object.hasOwn(manifest.engines ?? {}, "opencode"), false);
     assert.equal(manifest.engines?.node, ">=22.18.0");
     assert.ok(!files.some((file) => file.path === "tests/opencode.json"));

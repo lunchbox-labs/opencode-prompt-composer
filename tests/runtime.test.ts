@@ -4,179 +4,141 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { type TestContext, test } from "node:test";
 import type { Config, PluginInput } from "@opencode-ai/plugin";
-import { loadSettings } from "../src/settings.ts";
+import { discoverPrompts } from "../src/discovery.ts";
 import { compose } from "../src/runtime.ts";
 import server from "../src/server.ts";
 
-async function fixture(t: TestContext, settings: unknown) {
+async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "prompt-runtime-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, ".opencode/prompts"), { recursive: true });
-  await writeFile(
-    join(root, ".opencode/prompt-composer.jsonc"),
-    JSON.stringify(settings),
-  );
-  return { root, context: { root } };
+  return { root, context: { directory: root, worktree: root } };
 }
 
-test("native bodies compose defaults and agent fragments without modifying native metadata", async (t) => {
-  const { context } = await fixture(t, {
-    defaults: { prepend: ["Default before"], append: ["Default after"] },
-    agents: {
-      review: { prepend: ["Agent before"], append: ["Agent after"] },
-      lead: { inheritDefaults: false, append: ["Lead after"] },
-    },
-  });
+test("native bodies expand explicit includes without settings or metadata changes", async (t) => {
+  const { root, context } = await fixture(t);
+  await writeFile(join(root, ".opencode/prompts/body.md"), "  Evidence\n");
   const native: Config = {
     agent: {
-      review: { prompt: "Review", temperature: 0.2 },
-      lead: { prompt: "Lead" },
-      build: {},
+      review: {
+        prompt: "Before\n\n{{include:body.md}}\n\nAfter",
+        temperature: 0.2,
+        description: "Reviewer",
+      },
+    },
+    command: {
+      check: {
+        template: "{{include:body.md}} $ARGUMENTS $1 @file !`pwd`",
+        agent: "review",
+        subtask: true,
+      },
     },
   };
   const before = structuredClone(native);
-  const result = await compose(native, await loadSettings(context));
-  assert.equal(
-    result.config.agent?.review?.prompt,
-    "Default before\n\nAgent before\n\nReview\n\nDefault after\n\nAgent after",
-  );
-  assert.equal(result.config.agent.lead?.prompt, "Lead\n\nLead after");
-  assert.equal(result.config.agent.build?.prompt, undefined);
-  assert.equal(result.config.agent.review.temperature, 0.2);
-  assert.deepEqual(native, before);
-  assert.deepEqual(result.diagnostics, []);
-});
-
-test("missing agents are diagnostic while unsafe inactive fragments remain fatal (#78)", async (t) => {
-  const { context } = await fixture(t, {
-    agents: { absent: { append: ["Advice"] } },
+  const hooks = await server.server(context as PluginInput);
+  await hooks.config!(native);
+  assert.deepEqual(native, {
+    agent: {
+      review: {
+        ...before.agent!.review,
+        prompt: "Before\n\nEvidence\n\nAfter",
+      },
+    },
+    command: {
+      check: {
+        ...before.command!.check,
+        template: "Evidence $ARGUMENTS $1 @file !`pwd`",
+      },
+    },
   });
-  const settings = await loadSettings(context);
-  const result = await compose({ agent: {} }, settings);
-  assert.equal(result.diagnostics[0].kind, "agent");
-  settings.effective.agents!.absent.append = ["{{include:../secret.md}}"];
-  await assert.rejects(compose({ agent: {} }, settings), /safe relative/);
 });
 
-test("named rules report skipped meaningful additions while preserving native fallback", async (t) => {
-  for (const prompt of [undefined, "", " \n\t"]) {
-    const { context } = await fixture(t, {
-      defaults: { prepend: ["Default guidance"] },
-      agents: {
-        build: { append: ["Build guidance"] },
-        plan: {},
-        review: { inheritDefaults: false, prepend: ["Review guidance"] },
-      },
-    });
-    const native: Config = {
-      agent: {
-        build: {
-          ...(prompt === undefined ? {} : { prompt }),
-          temperature: 0.2,
-        },
-        plan: { prompt },
-        review: { prompt, description: "Reviewer" },
-        unnamed: { prompt },
-      },
-      command: { check: { template: "Check", agent: "build" } },
+test("obsolete policy files are ignored even when malformed, unsafe or non-files", async (t) => {
+  const { root, context } = await fixture(t);
+  await writeFile(join(root, ".opencode/prompts/body.md"), "Evidence");
+  const path = join(root, ".opencode/prompt-composer.jsonc");
+  const hooks = await server.server(context as PluginInput);
+  for (const text of [
+    "{ invalid",
+    JSON.stringify({
+      defaults: { prepend: ["Obsolete"] },
+      agents: { missing: { append: ["{{include:../secret.md}}"] } },
+    }),
+    "\0".repeat(1024 * 1024 + 1),
+  ]) {
+    await writeFile(path, text);
+    const config: Config = {
+      agent: { review: { prompt: "{{include:body.md}}" } },
     };
-    const before = structuredClone(native);
-    const result = await compose(native, await loadSettings(context));
-    assert.deepEqual(result.config, before);
-    assert.deepEqual(native, before);
-    assert.deepEqual(
-      result.diagnostics.map((item) => item.name),
-      ["build", "plan", "review"],
-    );
-    for (const notice of result.diagnostics) {
-      assert.equal(notice.kind, "agent");
-      assert.match(notice.message, /skipped.*native fallback/i);
-    }
+    await hooks.config!(config);
+    assert.equal(config.agent!.review!.prompt, "Evidence");
   }
-});
-
-test("empty effective additions and defaults opt-out do not produce fallback notices", async (t) => {
-  const { root, context } = await fixture(t, {
-    agents: {
-      absent: {},
-      empty: { prepend: [], append: ["", " \n\t"] },
-      included: { append: ["{{include:empty.md}}"] },
-      optedOut: { inheritDefaults: false },
-    },
-  });
-  await writeFile(join(root, ".opencode/prompts/empty.md"), " \n");
-  const settings = await loadSettings(context);
-  const native: Config = {
-    agent: { absent: {}, empty: {}, included: {}, optedOut: {} },
+  await rm(path);
+  await mkdir(path);
+  const config: Config = {
+    agent: { review: { prompt: "{{include:body.md}}" } },
   };
-  assert.deepEqual((await compose(native, settings)).diagnostics, []);
-  settings.effective.defaults = { append: ["Default guidance"] };
-  assert.deepEqual(
-    (
-      await compose(
-        { agent: { optedOut: {}, unnamed: {} } },
-        {
-          ...settings,
-          effective: {
-            defaults: settings.effective.defaults,
-            agents: {
-              optedOut: {
-                inheritDefaults: false,
-                append: ["{{include:empty.md}}"],
-              },
-            },
-          },
-        },
-      )
-    ).diagnostics,
-    [],
-  );
-  const result = await compose(
-    native,
-    await loadSettings(context),
-    new Map([[join(root, ".opencode/prompts/empty.md"), "Preview guidance"]]),
-  );
-  assert.deepEqual(
-    result.diagnostics.map((item) => item.name),
-    ["included"],
-  );
+  await hooks.config!(config);
+  assert.equal(config.agent!.review!.prompt, "Evidence");
 });
 
-test("missing and disabled notices remain distinct and skipped unsafe fragments stay fatal", async (t) => {
-  const { context } = await fixture(t, {
-    agents: {
-      missing: {},
-      disabled: { append: ["Advice"] },
-      build: { inheritDefaults: false },
+test("disabled, absent and blank native prompts retain host fallback", async (t) => {
+  const { context } = await fixture(t);
+  const hooks = await server.server(context as PluginInput);
+  const config: Config = {
+    agent: {
+      disabled: { disable: true, prompt: "{{include:missing.md}}" },
+      absent: {},
+      empty: { prompt: "" },
+      blank: { prompt: " \n\t" },
     },
-  });
-  const native: Config = { agent: { disabled: { disable: true }, build: {} } };
-  const settings = await loadSettings(context);
-  const result = await compose(native, settings);
-  assert.deepEqual(
-    result.diagnostics,
-    ["missing", "disabled"].map((name) => ({
-      kind: "agent",
-      name,
-      message: `Agent ${name} is missing or disabled; its prompt operations were skipped.`,
-    })),
-  );
-  for (const name of ["missing", "disabled", "build"]) {
-    const unsafe = structuredClone(settings.effective);
-    unsafe.agents![name].append = ["Advice", "{{include:../secret.md}}"];
-    await assert.rejects(
-      compose(native, { ...settings, effective: unsafe }),
-      /safe relative/,
-    );
-  }
-  settings.effective.defaults = { append: ["{{include:../secret.md}}"] };
-  await assert.rejects(compose(native, settings), /safe relative/);
+  };
+  const before = structuredClone(config);
+  await hooks.config!(config);
+  assert.deepEqual(config, before);
+});
+
+test("marker-free native bodies above the include budget are preserved", async (t) => {
+  const { context } = await fixture(t);
+  const hooks = await server.server(context as PluginInput);
+  const body = "x".repeat(262145);
+  const config: Config = {
+    agent: { review: { prompt: body } },
+    command: { check: { template: body } },
+  };
+  const before = structuredClone(config);
+  await hooks.config!(config);
+  assert.deepEqual(config, before);
+});
+
+test("failed config composition publishes no partial bodies and can retry from originals", async (t) => {
+  const { root, context } = await fixture(t);
+  await writeFile(join(root, ".opencode/prompts/body.md"), "First");
+  const hooks = await server.server(context as PluginInput);
+  const config: Config = {
+    agent: { review: { prompt: "{{include:body.md}}" } },
+    command: { check: { template: "{{include:missing.md}}" } },
+  };
+  const before = structuredClone(config);
+  await assert.rejects(hooks.config!(config), /does not exist/);
+  assert.deepEqual(config, before);
+  await writeFile(join(root, ".opencode/prompts/missing.md"), "Command");
+  await hooks.config!(config);
+  assert.equal(config.agent!.review!.prompt, "First");
+  assert.equal(config.command!.check.template, "Command");
+  const applied = structuredClone(config);
+  await writeFile(join(root, ".opencode/prompts/body.md"), "Second");
+  await rm(join(root, ".opencode/prompts/missing.md"));
+  await assert.rejects(hooks.config!(config), /does not exist/);
+  assert.deepEqual(config, applied);
+  await writeFile(join(root, ".opencode/prompts/missing.md"), "Restored");
+  await hooks.config!(config);
+  assert.equal(config.agent!.review!.prompt, "Second");
+  assert.equal(config.command!.check.template, "Restored");
 });
 
 test("config hook reloads native commands and agents without duplicate expansion or metadata loss", async (t) => {
-  const { root } = await fixture(t, {
-    defaults: { append: ["After"] },
-  });
+  const { root } = await fixture(t);
   const snippet = join(root, ".opencode/prompts/body.md");
   await writeFile(snippet, "First");
   const hooks = await server.server({
@@ -202,7 +164,7 @@ test("config hook reloads native commands and agents without duplicate expansion
   config.command!.review.description = "External edit";
   await writeFile(snippet, "Second");
   await hooks.config!(config);
-  assert.equal(config.agent!.review!.prompt, "Review Second\n\nAfter");
+  assert.equal(config.agent!.review!.prompt, "Review Second");
   assert.equal(
     config.command!.review.template,
     "Command Second {{include:literal.md}}",
@@ -211,11 +173,11 @@ test("config hook reloads native commands and agents without duplicate expansion
   assert.equal(config.command!.review.subtask, true);
   config.agent!.review!.prompt = "External body";
   await hooks.config!(config);
-  assert.equal(config.agent!.review!.prompt, "External body\n\nAfter");
+  assert.equal(config.agent!.review!.prompt, "External body");
 });
 
 test("skills expand on demand and reject truncated bodies without touching unrelated tools", async (t) => {
-  const { root } = await fixture(t, {});
+  const { root } = await fixture(t);
   await writeFile(join(root, ".opencode/prompts/body.md"), "Skill evidence");
   const hooks = await server.server({
     directory: root,
@@ -246,7 +208,7 @@ test("skills expand on demand and reject truncated bodies without touching unrel
 });
 
 test("include failures identify consumers and logical cycles without native paths or prompt bodies", async (t) => {
-  const { root, context } = await fixture(t, {});
+  const { root, context } = await fixture(t);
   await writeFile(
     join(root, ".opencode/prompts/a.md"),
     "SECRET A {{include:b.md}}",
@@ -255,7 +217,7 @@ test("include failures identify consumers and logical cycles without native path
     join(root, ".opencode/prompts/b.md"),
     "SECRET B {{include:a.md}}",
   );
-  const settings = await loadSettings(context);
+  const inventory = await discoverPrompts(context);
   for (const [native, consumer] of [
     [
       { agent: { review: { prompt: "SECRET {{include:a.md}}" } } },
@@ -266,7 +228,7 @@ test("include failures identify consumers and logical cycles without native path
       'command "check"',
     ],
   ] as const) {
-    await assert.rejects(compose(native, settings), (error: Error) => {
+    await assert.rejects(compose(native, inventory), (error: Error) => {
       assert.match(error.message, /cycle/);
       assert.ok(error.message.includes(consumer));
       assert.match(error.message, /a\.md.* -> .*b\.md.* -> .*a\.md/);
@@ -276,23 +238,8 @@ test("include failures identify consumers and logical cycles without native path
   }
 });
 
-test("inactive settings fragments and skill output have honest consumer context", async (t) => {
-  const { root, context } = await fixture(t, {
-    agents: { absent: { append: ["{{include:missing.md}}"] } },
-  });
-  await assert.rejects(
-    compose({}, await loadSettings(context)),
-    (error: Error) => {
-      assert.ok(
-        error.message.includes(
-          JSON.stringify(join(root, ".opencode/prompt-composer.jsonc")),
-        ),
-      );
-      assert.match(error.message, /\/agents\/absent\/append\/0/);
-      assert.match(error.message, /does not exist/);
-      return true;
-    },
-  );
+test("skill failures have honest consumer context", async (t) => {
+  const { root } = await fixture(t);
   const hooks = await server.server({
     directory: root,
     worktree: root,
@@ -315,7 +262,7 @@ test("inactive settings fragments and skill output have honest consumer context"
 });
 
 test("config composition preserves plugin registration without publishing editor state", async (t) => {
-  const { root } = await fixture(t, {});
+  const { root } = await fixture(t);
   const hooks = await server.server({
     directory: root,
     worktree: root,
@@ -330,7 +277,7 @@ test("config composition preserves plugin registration without publishing editor
 });
 
 test("removed editor reload tokens are not accepted as plugin options", async (t) => {
-  const { root } = await fixture(t, {});
+  const { root } = await fixture(t);
   assert.throws(
     () =>
       server.server({ directory: root, worktree: root } as PluginInput, {

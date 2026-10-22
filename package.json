@@ -24,7 +24,6 @@
       "types": "./dist/includes.d.ts",
       "default": "./dist/includes.js"
     },
-    "./schema.json": "./schema.json",
     "./tui": {
       "types": "./dist/tui.d.ts",
       "default": "./dist/tui.js"
@@ -33,7 +32,6 @@
   "files": [
     "dist",
     "docs",
-    "schema.json",
     "README.md",
     "LICENSE"
   ],
@@ -42,18 +40,14 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --experimental-strip-types --test tests/*.test.ts tests/*.test.mjs",
     "lint": "eslint . --max-warnings 0",
-    "format": "prettier --write src tests scripts package.json tsconfig*.json *.config.mjs schema.json",
-    "format:check": "prettier --check src tests scripts package.json tsconfig*.json *.config.mjs schema.json",
+    "format": "prettier --write src tests scripts package.json tsconfig*.json *.config.mjs",
+    "format:check": "prettier --check src tests scripts package.json tsconfig*.json *.config.mjs",
     "check": "npm run check:static && npm test",
     "prepack": "npm run build",
     "test:package": "npm run build && node --experimental-strip-types --test tests/package.integration.ts",
     "test:native": "npm run build && node --experimental-strip-types --test tests/native.integration.ts",
     "check:static": "concurrently --names typecheck,lint,format --kill-others-on-fail \"npm run typecheck\" \"npm run lint\" \"npm run format:check\"",
     "prebuild": "node --input-type=module -e \"import { rm } from 'node:fs/promises'; await rm('dist', { recursive: true, force: true });\""
-  },
-  "dependencies": {
-    "ajv": "8.20.0",
-    "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
     "@eslint-community/eslint-plugin-eslint-comments": "4.8.1",

@@ -14,11 +14,8 @@ const INCLUDE = /\\?\{\{include:([^{}]*)\}\}|\\?\{\{include:/g;
 export interface PromptDependency {
   path: string;
   canonicalPath: string;
-  includePaths?: string[];
   text: string;
   mode: number;
-  writable: false;
-  directories: { path: string; canonicalPath: string }[];
 }
 export type PromptRead = (dependency: PromptDependency) => void;
 
@@ -26,7 +23,6 @@ interface Expansion {
   sources: ReadonlyMap<string, DiscoveredPrompt>;
   includes: number;
   onRead?: PromptRead;
-  overlays?: ReadonlyMap<string, string>;
   consumer?: string;
 }
 
@@ -131,29 +127,14 @@ async function snippet(
       context.onRead?.({
         path: resolve(root, path),
         canonicalPath: target,
-        includePaths: [resolve(root, path)],
         text,
         mode: current.mode & 0o777,
-        writable: false,
-        directories: [{ path: root, canonicalPath: sourceRoot }],
       });
-      const candidate =
-        context.overlays?.get(resolve(root, path)) ??
-        context.overlays?.get(target) ??
-        text;
-      if (
-        Buffer.byteLength(candidate, "utf8") > MAX_SNIPPET_BYTES ||
-        candidate.includes("\0")
-      ) {
-        throw new SettingsError(
-          "Prompt snippets must contain text without NUL bytes, no larger than 64 KiB.",
-        );
-      }
       return {
-        text: candidate.trim(),
+        text: text.trim(),
         path: target,
-        sourceText: candidate,
-        offset: candidate.length - candidate.trimStart().length,
+        sourceText: text,
+        offset: text.length - text.trimStart().length,
       };
     } finally {
       await file.close();
@@ -254,8 +235,10 @@ export async function expandIncludes(
   text: string,
   sources: ReadonlyMap<string, DiscoveredPrompt>,
   onRead?: PromptRead,
-  overlays?: ReadonlyMap<string, string>,
   consumer?: string,
 ): Promise<string> {
-  return expand(text, { sources, includes: 0, onRead, overlays, consumer }, []);
+  if (!text.includes("{{include:")) {
+    return text;
+  }
+  return expand(text, { sources, includes: 0, onRead, consumer }, []);
 }
