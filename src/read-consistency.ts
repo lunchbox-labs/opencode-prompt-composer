@@ -85,8 +85,9 @@ export async function verifyReads(files: PromptDependency[]): Promise<void> {
 export async function verifyInventory(
   context: DiscoveryContext,
   inventory: PromptInventory,
+  environment: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
-  const current = await discoverPrompts(context);
+  const current = await discoverPrompts(context, environment);
   const identity = (inventory: typeof current) =>
     JSON.stringify([
       inventory.directories,

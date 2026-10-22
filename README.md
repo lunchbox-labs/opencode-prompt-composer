@@ -38,7 +38,7 @@ Skill bodies expand through the native `skill` tool; automatically generated ski
 
 Run `/view-prompts`, choose Agents or Commands, then select a component to read its complete loaded text. Skill composition is supported, but the viewer omits skills due to API limitations.
 
-Run `/reload-prompts`, or choose Reload prompts in `/view-prompts`, after editing prompts. Wait until OpenCode sessions are idle first. Global JSON configuration changes require restarting OpenCode.
+Prompt snippets are captured when the project loads. Restart the OpenCode server after editing snippets or native prompt definitions.
 
 ## Documentation
 

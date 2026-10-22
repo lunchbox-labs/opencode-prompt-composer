@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { type TestContext, test } from "node:test";
 import type { Config, PluginInput } from "@opencode-ai/plugin";
 import { discoverPrompts } from "../src/discovery.ts";
+import { expandIncludes } from "../src/includes.ts";
 import { compose } from "../src/runtime.ts";
 import server from "../src/server.ts";
 
@@ -137,9 +138,10 @@ test("marker-free native bodies above the include budget are preserved", async (
   assert.deepEqual(config, before);
 });
 
-test("failed config composition publishes no partial bodies and can retry from originals", async (t) => {
+test("failed config composition publishes no partial bodies and can retry corrected native references", async (t) => {
   const { root, context } = await fixture(t);
   await writeFile(join(root, ".opencode/prompts/body.md"), "First");
+  await writeFile(join(root, ".opencode/prompts/command.md"), "Command");
   const hooks = await server.server(context as PluginInput);
   const config: Config = {
     agent: { review: { prompt: "{{include:body.md}}" } },
@@ -148,22 +150,31 @@ test("failed config composition publishes no partial bodies and can retry from o
   const before = structuredClone(config);
   await assert.rejects(hooks.config!(config), /does not exist/);
   assert.deepEqual(config, before);
-  await writeFile(join(root, ".opencode/prompts/missing.md"), "Command");
+  await writeFile(
+    join(root, ".opencode/prompts/missing.md"),
+    "Added after startup",
+  );
+  await assert.rejects(hooks.config!(config), /does not exist/);
+  assert.deepEqual(config, before);
+  config.command!.check.template = "{{include:command.md}}";
   await hooks.config!(config);
   assert.equal(config.agent!.review!.prompt, "First");
   assert.equal(config.command!.check.template, "Command");
   const applied = structuredClone(config);
   await writeFile(join(root, ".opencode/prompts/body.md"), "Second");
-  await rm(join(root, ".opencode/prompts/missing.md"));
-  await assert.rejects(hooks.config!(config), /does not exist/);
-  assert.deepEqual(config, applied);
-  await writeFile(join(root, ".opencode/prompts/missing.md"), "Restored");
+  await rm(join(root, ".opencode/prompts/command.md"));
   await hooks.config!(config);
-  assert.equal(config.agent!.review!.prompt, "Second");
-  assert.equal(config.command!.check.template, "Restored");
+  assert.deepEqual(config, applied);
+  config.command!.check.template = "{{include:still-missing.md}}";
+  const invalid = structuredClone(config);
+  await assert.rejects(hooks.config!(config), /does not exist/);
+  assert.deepEqual(config, invalid);
+  config.command!.check.template = applied.command!.check.template;
+  await hooks.config!(config);
+  assert.deepEqual(config, applied);
 });
 
-test("config hook reloads native commands and agents without duplicate expansion or metadata loss", async (t) => {
+test("config hook reuses startup snippets without duplicate expansion or metadata loss", async (t) => {
   const { root } = await fixture(t);
   const snippet = join(root, ".opencode/prompts/body.md");
   await writeFile(snippet, "First");
@@ -190,10 +201,10 @@ test("config hook reloads native commands and agents without duplicate expansion
   config.command!.review.description = "External edit";
   await writeFile(snippet, "Second");
   await hooks.config!(config);
-  assert.equal(config.agent!.review!.prompt, "Review Second");
+  assert.equal(config.agent!.review!.prompt, "Review First");
   assert.equal(
     config.command!.review.template,
-    "Command Second {{include:literal.md}}",
+    "Command First {{include:literal.md}}",
   );
   assert.equal(config.command!.review.description, "External edit");
   assert.equal(config.command!.review.subtask, true);
@@ -282,13 +293,18 @@ test("include failures identify consumers and logical cycles without native path
       'command "check"',
     ],
   ] as const) {
-    await assert.rejects(compose(native, inventory), (error: Error) => {
-      assert.match(error.message, /cycle/);
-      assert.ok(error.message.includes(consumer));
-      assert.match(error.message, /a\.md.* -> .*b\.md.* -> .*a\.md/);
-      assert.doesNotMatch(error.message, /SECRET|agents\/|commands\//);
-      return true;
-    });
+    await assert.rejects(
+      compose(native, (text, consumer) =>
+        expandIncludes(text, inventory.files, undefined, consumer),
+      ),
+      (error: Error) => {
+        assert.match(error.message, /cycle/);
+        assert.ok(error.message.includes(consumer));
+        assert.match(error.message, /a\.md.* -> .*b\.md.* -> .*a\.md/);
+        assert.doesNotMatch(error.message, /SECRET|agents\/|commands\//);
+        return true;
+      },
+    );
   }
 });
 

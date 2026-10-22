@@ -69,6 +69,41 @@ test("nested includes preserve escaped markers and report source dependencies", 
   assert.equal(reads[0].text, "Review {{include:inner.txt}}");
 });
 
+test("public includes stay live and observer mutation cannot alter loaded text", async (t) => {
+  const { sources } = await fixture(t);
+  await writeFile(join(sources, "body.md"), " First ");
+  let observations = 0;
+  const observe = (read: PromptDependency) => {
+    observations++;
+    read.text = "Observer edit";
+    read.canonicalPath = "Observer path";
+  };
+  assert.equal(
+    await expandIncludes("{{include:body.md}}", sources, observe),
+    "First",
+  );
+  await writeFile(join(sources, "body.md"), " Second ");
+  assert.equal(
+    await expandIncludes(
+      "{{include:body.md}} {{include:body.md}}",
+      sources,
+      observe,
+    ),
+    "Second Second",
+  );
+  assert.equal(observations, 3);
+  await assert.rejects(
+    expandIncludes("{{include:body.md}}", sources, () => {
+      throw new Error("PRIVATE CALLBACK");
+    }),
+    (error: Error) => {
+      assert.match(error.message, /Could not read prompt include/);
+      assert.doesNotMatch(error.message, /PRIVATE CALLBACK/);
+      return true;
+    },
+  );
+});
+
 test("rejects unsafe and malformed references without reading outside the alias", async (t) => {
   const { root, sources } = await fixture(t);
   await writeFile(join(root, "outside.md"), "secret");

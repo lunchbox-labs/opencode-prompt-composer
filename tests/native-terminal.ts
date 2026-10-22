@@ -221,8 +221,6 @@ export async function exerciseNativeTerminal(options: {
   project: string;
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;
-  editPrompts: (stage: "slash" | "menu" | "broken") => Promise<void>;
-  verifyReload: (stage: "slash" | "menu" | "broken") => Promise<void>;
 }) {
   // Attach to the already exercised/warmed server rather than starting a second
   // cold backend. TUI npm loading, compatibility and command registration remain native.
@@ -287,68 +285,6 @@ export async function exerciseNativeTerminal(options: {
     await terminal.wait("View prompts");
     terminal.write("\x1b");
     await terminal.waitFor(terminal.promptFocused, "main input after preview");
-    for (const stage of ["slash", "menu", "broken"] as const) {
-      await options.editPrompts(stage);
-      const command = stage === "menu" ? "/view-prompts" : "/reload-prompts";
-      terminal.write(command);
-      await terminal.waitFor(
-        () => terminal.echoed(command),
-        `${command} input echo`,
-      );
-      await terminal.wait(stage === "menu" ? "View prompts" : "Reload prompts");
-      terminal.write("\r");
-      if (stage === "menu") {
-        await terminal.wait(
-          "View prompts",
-          "Agents",
-          "Commands",
-          "Reload prompts",
-        );
-        await select("Reload prompts", "Prompt reload");
-      }
-      await terminal.wait(
-        "Prompt reload",
-        "Instance reloaded",
-        "composition errors",
-        "Global JSON configuration is not reloaded. Restart",
-        "OpenCode to apply those changes.",
-      );
-      await options.verifyReload(stage);
-      terminal.write("\x1b");
-      await terminal.waitFor(
-        terminal.promptFocused,
-        "main input after prompt reload",
-      );
-      if (stage === "broken") {
-        continue;
-      }
-      terminal.write("/view-prompts");
-      await terminal.waitFor(
-        () => terminal.echoed("/view-prompts"),
-        "reopened viewer input echo",
-      );
-      await terminal.wait("View prompts");
-      terminal.write("\r");
-      await terminal.wait("View prompts", "Agents", "Commands");
-      await select("Agents", "Loaded agent prompts");
-      await select("Agent: review", "Agent: review — pages");
-      await select("Page 1 of 1", "Agent: review — page 1/1");
-      await terminal.wait(
-        `${stage} agent Project ${stage}`,
-        "State uncertainty.",
-      );
-      terminal.write("\x1b");
-      await terminal.wait("Agent: review — pages");
-      terminal.write("\x1b");
-      await terminal.wait("Loaded agent prompts");
-      terminal.write("\x1b");
-      await terminal.wait("View prompts");
-      terminal.write("\x1b");
-      await terminal.waitFor(
-        terminal.promptFocused,
-        "main input after refreshed viewer",
-      );
-    }
   } finally {
     await terminal.stop();
   }

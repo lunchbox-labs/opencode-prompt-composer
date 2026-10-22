@@ -54,7 +54,7 @@ export async function exercisePromptViewer(
       }) {
         assert.deepEqual(
           layer.commands.map((command) => command.slashName),
-          ["view-prompts", "reload-prompts"],
+          ["view-prompts"],
         );
         open = layer.commands[0].run;
         return () => {};
@@ -119,7 +119,6 @@ export async function exercisePromptViewer(
   assert.deepEqual(categories.options, [
     { title: "Agents", value: "agents" },
     { title: "Commands", value: "commands" },
-    { title: "Reload prompts", value: "reload" },
   ]);
   for (const [category, menuTitle, prefix, entries] of [
     [
