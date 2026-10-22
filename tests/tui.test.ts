@@ -125,32 +125,37 @@ async function harness(config: Config = {}) {
   };
 }
 
-test("read-only viewer uses only connected config and preserves literal command text", async () => {
+test("agent viewer registers only agent-prompts and preserves loaded text without executing syntax", async () => {
   const text =
     "Loaded {{include:unavailable.md}} $ARGUMENTS $1 !`touch never`\\\n";
-  const config = { command: { check: { template: text } } };
+  const config = {
+    agent: { check: { prompt: text } },
+    command: {
+      hidden: { template: "Command templates are not agent prompts" },
+    },
+  };
   const before = structuredClone(config);
   const h = await harness(config);
   assert.deepEqual(
     h.commands.map(({ name, slashName }) => ({ name, slashName })),
-    [{ name: "prompt-composer.compose", slashName: "compose-prompts" }],
+    [{ name: "prompt-composer.agent-prompts", slashName: "agent-prompts" }],
   );
   h.open();
-  const menu = await h.view("Loaded prompts");
+  const menu = await h.view("Loaded agent prompts");
   assert.deepEqual(menu.options, [
-    { title: "Command: check", value: "command:check" },
+    { title: "Agent: check", value: "agent:check" },
   ]);
   assert.equal(h.reads.length, 1);
   assert.equal(h.reads[0].directory, "/remote/project/nested");
   assert.equal(h.reads[0].signal, h.controller.signal);
-  h.choose("command:check");
-  await h.view("Command: check — pages");
+  h.choose("agent:check");
+  await h.view("Agent: check — pages");
   h.choose("0");
-  assert.equal((await h.view("Command: check — page 1/1")).message, text);
+  assert.equal((await h.view("Agent: check — page 1/1")).message, text);
   await h.escape();
-  await h.view("Command: check — pages");
+  await h.view("Agent: check — pages");
   h.choose("\u0000back");
-  await h.view("Loaded prompts");
+  await h.view("Loaded agent prompts");
   await h.escape();
   assert.equal(h.current, undefined);
   assert.equal(h.reads.length, 1);
@@ -165,15 +170,16 @@ test("agent pages retain full Unicode text and label disabled and native fallbac
       off: { disable: true, prompt: "Inactive" },
       build: {},
       blank: { prompt: " \n\t" },
+      empty: { prompt: "" },
     },
   });
   h.open();
-  const menu = await h.view("Loaded prompts");
+  const menu = await h.view("Loaded agent prompts");
   assert.equal(
     menu.options!.find((item) => item.value === "agent:off")?.title,
     "Agent: off (disabled)",
   );
-  for (const name of ["build", "blank"]) {
+  for (const name of ["build", "blank", "empty"]) {
     const title = `Agent: ${name} (native fallback)`;
     assert.equal(
       menu.options!.find((item) => item.value === `agent:${name}`)?.title,
@@ -208,28 +214,20 @@ test("agent pages retain full Unicode text and label disabled and native fallbac
   assert.equal(parts.join(""), text);
 });
 
-test("empty config and empty command bodies have readable placeholders", async () => {
-  const h = await harness();
-  h.open();
-  const menu = await h.view("Loaded prompts");
-  assert.deepEqual(menu.options, [
-    { title: "No configured agent or command text", value: "empty" },
-  ]);
-  h.choose("empty");
-  assert.equal(h.current, menu);
-  h.read = () =>
-    Promise.resolve({
-      data: { command: { empty: { template: "" } } },
-      error: undefined,
-    });
-  h.open();
-  await h.view("Loaded prompts");
-  h.choose("command:empty");
-  h.choose("0");
-  assert.equal(
-    (await h.view("Command: empty — page 1/1")).message,
-    "(empty text)",
-  );
+test("empty and command-only configs show no configured agent prompts", async () => {
+  for (const config of [
+    {},
+    { command: { check: { template: "Command only" } } },
+  ]) {
+    const h = await harness(config);
+    h.open();
+    const menu = await h.view("Loaded agent prompts");
+    assert.deepEqual(menu.options, [
+      { title: "No configured agent prompts", value: "empty" },
+    ]);
+    h.choose("empty");
+    assert.equal(h.current, menu);
+  }
 });
 
 for (const change of [
@@ -251,12 +249,12 @@ for (const change of [
             fail
               ? reject(new Error("Disconnected"))
               : resolve({
-                  data: { command: { old: { template: "Old" } } },
+                  data: { agent: { old: { prompt: "Old" } } },
                   error: undefined,
                 });
         });
       h.open();
-      await h.view("Loading prompts");
+      await h.view("Loading agent prompts");
       await setImmediate();
       if (change === "close") {
         await h.escape();
@@ -281,11 +279,11 @@ for (const change of [
       if (change === "reopen") {
         h.read = () =>
           Promise.resolve({
-            data: { command: { new: { template: "New" } } },
+            data: { agent: { new: { prompt: "New" } } },
             error: undefined,
           });
         h.open();
-        await h.view("Loaded prompts");
+        await h.view("Loaded agent prompts");
       }
       const before = h.current;
       finish();
@@ -302,7 +300,7 @@ test("errors are displayed and reopening fetches the current loaded config", asy
   h.open();
   assert.match(
     (await h.view("Prompt Composer")).message!,
-    /Could not read loaded prompts/,
+    /Could not read loaded agent prompts/,
   );
   h.read = () =>
     Promise.resolve({
@@ -311,24 +309,24 @@ test("errors are displayed and reopening fetches the current loaded config", asy
     });
   h.open();
   assert.equal(
-    (await h.view("Loaded prompts")).options?.[0].value,
+    (await h.view("Loaded agent prompts")).options?.[0].value,
     "agent:fresh",
   );
 });
 
 test("retired callbacks cannot reopen pages and Back rebinds active callbacks", async () => {
-  const h = await harness({ command: { check: { template: "Text" } } });
+  const h = await harness({ agent: { check: { prompt: "Text" } } });
   h.open();
-  const menu = await h.view("Loaded prompts");
+  const menu = await h.view("Loaded agent prompts");
   const item = menu.options![0];
   h.choose(item.value);
-  const pages = await h.view("Command: check — pages");
+  const pages = await h.view("Agent: check — pages");
   menu.onSelect?.(item);
   await setImmediate();
   assert.equal(h.current, pages);
   h.choose("\u0000back");
   h.choose(item.value);
-  await h.view("Command: check — pages");
+  await h.view("Agent: check — pages");
   await h.escape();
   await h.escape();
   menu.onSelect?.(item);
@@ -338,9 +336,9 @@ test("retired callbacks cannot reopen pages and Back rebinds active callbacks", 
 
 for (const change of ["client", "directory", "worktree", "dispose"] as const) {
   test(`${change} change prevents browsing loaded text from the old context`, async () => {
-    const h = await harness({ command: { check: { template: "Text" } } });
+    const h = await harness({ agent: { check: { prompt: "Text" } } });
     h.open();
-    const menu = await h.view("Loaded prompts");
+    const menu = await h.view("Loaded agent prompts");
     if (change === "client") {
       Object.assign(h.api, { client: {} });
     }
@@ -353,19 +351,19 @@ for (const change of ["client", "directory", "worktree", "dispose"] as const) {
     if (change === "dispose") {
       h.controller.abort();
     }
-    h.choose("command:check");
+    h.choose("agent:check");
     await setImmediate();
     assert.equal(h.current, menu);
   });
 }
 
 test("native command dispatch can clear its picker before the viewer opens", async () => {
-  const h = await harness({ command: { check: { template: "Loaded" } } });
+  const h = await harness({ agent: { check: { prompt: "Loaded" } } });
   h.open();
   // Native command handlers clear their picker after invoking the command.
   h.api.ui.dialog.clear();
   assert.equal(
-    (await h.view("Loaded prompts")).options?.[0].value,
-    "command:check",
+    (await h.view("Loaded agent prompts")).options?.[0].value,
+    "agent:check",
   );
 });

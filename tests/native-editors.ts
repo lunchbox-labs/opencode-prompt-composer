@@ -18,7 +18,7 @@ interface View {
 }
 
 /** Installed viewer and native HTTP client; only terminal rendering is replaced. */
-export async function exercisePromptViewer(
+export async function exerciseAgentPromptViewer(
   plugin: string,
   request: Request,
   settingsPath: string,
@@ -44,7 +44,13 @@ export async function exercisePromptViewer(
     lifecycle: { signal: new AbortController().signal, onDispose() {} },
     route: { current: { name: "home" } },
     keymap: {
-      registerLayer(layer: { commands: { run: () => void }[] }) {
+      registerLayer(layer: {
+        commands: { slashName: string; run: () => void }[];
+      }) {
+        assert.deepEqual(
+          layer.commands.map((command) => command.slashName),
+          ["agent-prompts"],
+        );
         open = layer.commands[0].run;
         return () => {};
       },
@@ -104,13 +110,8 @@ export async function exercisePromptViewer(
     current?.onSelect?.(item);
   }
   open();
-  const menu = await view("Loaded prompts");
-  assert.ok(
-    menu.options!.every(
-      (item) =>
-        item.value.startsWith("agent:") || item.value.startsWith("command:"),
-    ),
-  );
+  const menu = await view("Loaded agent prompts");
+  assert.ok(menu.options!.every((item) => item.value.startsWith("agent:")));
   if (config.agent.helper.disable === true) {
     assert.equal(
       menu.options!.find((item) => item.value === "agent:helper")?.title,
@@ -119,7 +120,11 @@ export async function exercisePromptViewer(
   }
   for (const [value, title, expected] of [
     ["agent:review", "Agent: review", config.agent.review.prompt],
-    ["command:check", "Command: check", config.command.check.template],
+    [
+      "agent:helper",
+      `Agent: helper${config.agent.helper.disable === true ? " (disabled)" : ""}`,
+      config.agent.helper.prompt,
+    ],
   ]) {
     choose(value!);
     const pages = (await view(`${title} — pages`)).options!.filter(
@@ -136,7 +141,7 @@ export async function exercisePromptViewer(
     }
     assert.equal(text.join(""), expected);
     choose("\u0000back");
-    await view("Loaded prompts");
+    await view("Loaded agent prompts");
   }
   api.ui.dialog.clear();
   await Promise.resolve();

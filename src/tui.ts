@@ -13,8 +13,8 @@ const PromptComposerTui: TuiPlugin = (api) => {
     navigation.show(
       () =>
         api.ui.DialogAlert({
-          title: "Loading prompts",
-          message: "Reading loaded agent and command text…",
+          title: "Loading agent prompts",
+          message: "Reading loaded agent prompt text…",
         }),
       true,
     );
@@ -29,10 +29,10 @@ const PromptComposerTui: TuiPlugin = (api) => {
         return;
       }
       if (response.error !== undefined) {
-        throw new Error("Could not read loaded prompts from OpenCode.");
+        throw new Error("Could not read loaded agent prompts from OpenCode.");
       }
-      const entries = [
-        ...Object.entries(response.data.agent ?? {}).map(([name, agent]) => {
+      const entries = Object.entries(response.data.agent ?? {}).map(
+        ([name, agent]) => {
           const fallback =
             agent?.prompt === undefined || agent.prompt.trim() === "";
           const labels = [
@@ -46,15 +46,8 @@ const PromptComposerTui: TuiPlugin = (api) => {
               ? "(native fallback — no configured prompt text)"
               : (agent.prompt ?? ""),
           };
-        }),
-        ...Object.entries(response.data.command ?? {}).map(
-          ([name, command]) => ({
-            title: `Command: ${name}`,
-            value: `command:${name}`,
-            text: command.template,
-          }),
-        ),
-      ];
+        },
+      );
       // Rebind callbacks when Back restores a view; retired callbacks stay inert.
       const menu = (
         title: string,
@@ -78,10 +71,10 @@ const PromptComposerTui: TuiPlugin = (api) => {
         }, root);
       };
       menu(
-        "Loaded prompts",
+        "Loaded agent prompts",
         entries.length > 0
           ? entries.map(({ title, value }) => ({ title, value }))
-          : [{ title: "No configured agent or command text", value: "empty" }],
+          : [{ title: "No configured agent prompts", value: "empty" }],
         (value) => {
           const entry = entries.find((item) => item.value === value);
           if (entry === undefined) {
@@ -114,7 +107,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
               message:
                 error instanceof Error
                   ? error.message
-                  : "Could not read loaded prompts.",
+                  : "Could not read loaded agent prompts.",
             }),
           true,
         );
@@ -124,11 +117,11 @@ const PromptComposerTui: TuiPlugin = (api) => {
   const unregister = api.keymap.registerLayer({
     commands: [
       {
-        name: "prompt-composer.compose",
-        title: "View loaded prompts",
+        name: "prompt-composer.agent-prompts",
+        title: "View agent prompts",
         namespace: "palette",
         category: "Prompts",
-        slashName: "compose-prompts",
+        slashName: "agent-prompts",
         // Native command dispatch clears its picker after invoking the handler.
         run: () => Promise.resolve().then(open),
       },
