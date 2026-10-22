@@ -199,10 +199,18 @@ test(
       join(project, ".opencode/commands/check.md"),
       "---\ndescription: Native command\nagent: review\nsubtask: true\n---\nCheck {{include:review/body.md}} $ARGUMENTS \\{{include:literal.md}}",
     );
-    await writeFile(
-      join(project, ".opencode/skills/evidence/SKILL.md"),
-      "---\nname: evidence\ndescription: Evidence checklist\n---\nSkill {{include:review/body.md}}",
+    const skillDirectory = join(project, ".opencode/skills/evidence");
+    const skillBody =
+      "Skill {{include:review/body.md}}\n\\{{include:literal.md}}";
+    const skillText = `---\nname: evidence\ndescription: Evidence checklist\n---\n${skillBody}`;
+    await writeFile(join(skillDirectory, "SKILL.md"), skillText);
+    // Colons are not valid in Windows filenames; unit tests cover Windows-shaped
+    // wrapper metadata too. POSIX native loading proves filenames remain literal.
+    const skillFile = join(
+      skillDirectory,
+      process.platform === "win32" ? "reference.txt" : "{{include:wrapper.md}}",
     );
+    await writeFile(skillFile, "Sampled filename, not prompt content.");
     const obsoletePath = join(project, ".opencode/prompt-composer.jsonc");
     const obsoleteText = "{ malformed obsolete policy: ignored";
     await writeFile(obsoletePath, obsoleteText);
@@ -243,6 +251,10 @@ test(
       request.on("end", () => {
         received.push(text);
         const toolReturned = text.includes('"role":"tool"');
+        const slashRequested = text.includes(
+          "Skill {{include:review/body.md}}",
+        );
+        const finished = toolReturned || slashRequested;
         const base = {
           id: "fixture",
           model: "fixture",
@@ -250,7 +262,7 @@ test(
           object: "chat.completion.chunk",
         };
         response.writeHead(200, { "Content-Type": "text/event-stream" });
-        const delta = toolReturned
+        const delta = finished
           ? { role: "assistant", content: "Verified." }
           : {
               role: "assistant",
@@ -267,7 +279,7 @@ test(
           `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`,
         );
         response.end(
-          `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: toolReturned ? "stop" : "tool_calls" }] })}\n\ndata: [DONE]\n\n`,
+          `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: finished ? "stop" : "tool_calls" }] })}\n\ndata: [DONE]\n\n`,
         );
       });
     });
@@ -483,6 +495,19 @@ test(
       "Check Project evidence $ARGUMENTS {{include:literal.md}}",
     );
     assert.equal(config.command.check.subtask, true);
+    // OpenCode derives skill commands after config hooks, directly from cached
+    // skill content. They do not pass through the skill tool's after hook.
+    assert.equal(config.command.evidence, undefined);
+    const nativeCommands = (await api("/command")) as {
+      name: string;
+      source: string;
+      template: string;
+    }[];
+    const skillCommand = nativeCommands.find(
+      (command) => command.name === "evidence",
+    );
+    assert.equal(skillCommand?.source, "skill");
+    assert.ok(skillCommand.template.startsWith(skillBody));
     assert.equal(await readFile(obsoletePath, "utf8"), obsoleteText);
     if (configPlugin !== undefined) {
       assert.equal(config.agent.review.model, "fixture/model", logs);
@@ -510,6 +535,74 @@ test(
     assert.ok(
       received.some((body) => body.includes("Skill Project evidence")),
       `${logs}\nFixture model requests: ${JSON.stringify(received)}\nSession messages: ${JSON.stringify(await api(`/session/${session.id}/message`))}`,
+    );
+    const toolMessages = received.flatMap((body) =>
+      (
+        JSON.parse(body) as { messages: { role: string; content: string }[] }
+      ).messages.filter((message) => message.role === "tool"),
+    );
+    assert.ok(
+      toolMessages.some(
+        (message) =>
+          message.content ===
+          [
+            '<skill_content name="evidence">',
+            "# Skill: evidence",
+            "",
+            "Skill Project evidence\n{{include:literal.md}}",
+            "",
+            `Base directory for this skill: ${skillDirectory}`,
+            "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
+            "Note: file list is sampled.",
+            "",
+            "<skill_files>",
+            `<file>${skillFile}</file>`,
+            "</skill_files>",
+            "</skill_content>",
+          ].join("\n"),
+      ),
+      JSON.stringify(toolMessages),
+    );
+    assert.equal(
+      await readFile(join(skillDirectory, "SKILL.md"), "utf8"),
+      skillText,
+    );
+
+    const slashSession = (await api("/session", {})) as { id: string };
+    const beforeSlash = received.length;
+    const slashMessage = await api(`/session/${slashSession.id}/command`, {
+      command: "evidence",
+      arguments: "",
+      agent: "review",
+      model: "fixture/model",
+    });
+    assert.match(JSON.stringify(slashMessage), /Verified/);
+    const slashMessages = received.slice(beforeSlash).flatMap(
+      (body) =>
+        (
+          JSON.parse(body) as {
+            messages: { role: string; content: unknown }[];
+          }
+        ).messages,
+    );
+    // Native title generation can issue another request. Assert the route's
+    // content and absence of tool results instead of assuming a request count.
+    assert.ok(slashMessages.every((message) => message.role !== "tool"));
+    const slashUsers = slashMessages.filter(
+      (message) => message.role === "user",
+    );
+    assert.ok(
+      slashUsers.some((message) =>
+        JSON.stringify(message.content).includes(
+          "Skill {{include:review/body.md}}",
+        ),
+      ),
+    );
+    assert.ok(
+      slashUsers.every(
+        (message) =>
+          !JSON.stringify(message.content).includes("Skill Project evidence"),
+      ),
     );
     await writeFile(
       join(project, ".opencode/prompts/review/nested.txt"),

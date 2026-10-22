@@ -4,6 +4,7 @@ import { SettingsError } from "./errors.ts";
 import { discoverPrompts } from "./discovery.ts";
 import { compose } from "./runtime.ts";
 import { verifyInventory, verifyReads } from "./read-consistency.ts";
+import { expandSkillBody } from "./skill-body.ts";
 
 interface Bodies {
   agents: Record<string, string>;
@@ -76,26 +77,19 @@ const PromptComposer: Plugin = (input, options = {}) => {
       if (input.tool !== "skill") {
         return;
       }
-      const metadata: unknown = output.metadata;
-      if (
-        typeof metadata === "object" &&
-        metadata !== null &&
-        "truncated" in metadata &&
-        metadata.truncated === true
-      ) {
-        throw new SettingsError(
-          "The skill output was truncated before composition. Reduce its size and load it again.",
-        );
-      }
-      if (output.output.includes("{{include:")) {
-        const inventory = await discoverPrompts(context);
-        output.output = await expandIncludes(
-          output.output,
-          inventory.files,
-          undefined,
-          "skill output (source file unavailable)",
-        );
-      }
+      output.output = await expandSkillBody(
+        output.output,
+        output.metadata,
+        async (body) => {
+          const inventory = await discoverPrompts(context);
+          return expandIncludes(
+            body,
+            inventory.files,
+            undefined,
+            "skill output (source file unavailable)",
+          );
+        },
+      );
     },
   } satisfies Hooks);
 };

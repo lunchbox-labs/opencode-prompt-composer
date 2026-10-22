@@ -44,6 +44,16 @@ There is no Prompt Composer settings file or policy layer. Put any before/after 
 
 The public `@lunchbox-labs/opencode-prompt-composer/includes` utility exports `expandIncludes(text, sources, onRead?, consumer?)`. Its registry maps relative names to `{path, root, relativePath}`; optional read callbacks receive `{path, canonicalPath, text, mode}`. The editor overlay argument, editor metadata and settings/schema exports have been removed.
 
+## Native boundaries
+
+Agent prompts and configured command templates expand when OpenCode runs the plugin's config hook. Skill bodies expand when the native `skill` tool returns them. If its output contains an include marker, the supported OpenCode 1.19.x wrapper is checked before locating the body; its name, base directory and sampled filenames remain literal. Unknown, incomplete or ambiguous framing is then rejected without publishing a partially composed result. Marker-free output passes through without framing checks. Output explicitly marked truncated by the host is always rejected.
+
+OpenCode's automatically generated `/skill-name` commands use cached skill text outside these hooks: **includes in that slash route do not expand**. A configured command with its own explicit includes is supported. Frontmatter, `AGENTS.md`, direct file reads and other tool output are outside this plugin's composition boundary. The read-only `/agent-prompts` viewer shows the complete composed agent prompt text returned by the server; it does not load skills.
+
+Edit native bodies and snippets in your usual editor. Reload or restart the OpenCode instance to refresh loaded agent/command bodies and cached skill definitions. A new skill-tool call reads its referenced snippets again, but does not invalidate the host's cached skill body. Reopening the viewer only fetches the server's currently loaded text.
+
+Composition errors preserve the previous config object or skill output. OpenCode 1.19.x logs and ignores config-hook failures, so an error does **not** guarantee startup stops or that the host refuses the original unexpanded text. Check host errors and loaded text after editing includes.
+
 ## Documentation
 
 - [Wiki](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki) and [published npm tarball downloads](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Downloads)
