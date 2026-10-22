@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { type TestContext, test } from "node:test";
 import {
+  MAX_PROMPT_BYTES,
   type PromptDependency,
   expandIncludes as expand,
 } from "../src/includes.ts";
@@ -213,4 +214,107 @@ test("unsafe marker payloads cannot dump body text into diagnostics", async (t) 
 test("marker-free text bypasses the include byte budget", async () => {
   const text = "Native " + "x".repeat(262145);
   assert.equal(await expand(text, new Map()), text);
+});
+
+test("escaped markers require only linear UTF-8 measurement work", async (t) => {
+  const byteLength = Buffer.byteLength.bind(Buffer);
+  let measuredCharacters = 0;
+  t.mock.method(
+    Buffer,
+    "byteLength",
+    (...args: Parameters<typeof byteLength>) => {
+      if (typeof args[0] === "string") {
+        measuredCharacters += args[0].length;
+      }
+      return byteLength(...args);
+    },
+  );
+
+  for (const count of [100, 1000]) {
+    const text = "pré \\{{include:rules.md}}🧭".repeat(count);
+    measuredCharacters = 0;
+    assert.equal(
+      await expand(text, new Map()),
+      "pré {{include:rules.md}}🧭".repeat(count),
+    );
+    assert.ok(
+      measuredCharacters <= 2 * text.length,
+      `Measured ${measuredCharacters} characters for ${text.length} input characters`,
+    );
+  }
+});
+
+test("initial byte limits still apply before escaped markers shrink the output", async () => {
+  const marker = "\\{{include:literal.md}}";
+  const prefix =
+    "é".repeat(100) + "x".repeat(MAX_PROMPT_BYTES - 200 - marker.length);
+  assert.equal(
+    await expand(prefix + marker, new Map()),
+    prefix + "{{include:literal.md}}",
+  );
+  await assert.rejects(expand(prefix + marker + "x", new Map()), {
+    name: "PromptComposerError",
+    message: "The composed prompt exceeds the 256 KiB limit.",
+  });
+});
+
+test("composed multibyte output accepts the exact byte limit and rejects one extra byte", async (t) => {
+  const { sources } = await fixture(t);
+  const snippet = "é".repeat(32768);
+  await writeFile(join(sources, "full.md"), snippet);
+  const text = "{{include:full.md}}".repeat(4);
+  assert.equal(await expandIncludes(text, sources), snippet.repeat(4));
+  await assert.rejects(expandIncludes(text + "x", sources), {
+    name: "PromptComposerError",
+    message:
+      'The composed prompt exceeds the 256 KiB limit. Include chain: "full.md".',
+  });
+});
+
+test("UTF-8 limits account for native surrogate boundaries through empty includes", async (t) => {
+  const { sources } = await fixture(t);
+  const block = "x".repeat(65520);
+  await writeFile(join(sources, "block.md"), block);
+  await writeFile(join(sources, "empty.md"), "");
+  const empty = "{{include:empty.md}}";
+  for (const [suffix, expected] of [
+    [`\ud800${empty}${empty}\udc00`, "\ud800\udc00"],
+    [`\ud800${empty}${empty}\udc00${empty}`, "\ud800\udc00"],
+    [`\ud800${empty}${empty}é`, "\ud800é"],
+    [`é${empty}\udc00`, "é\udc00"],
+    [`\udc00${empty}\ud800`, "\udc00\ud800"],
+  ]) {
+    const padding = "x".repeat(
+      MAX_PROMPT_BYTES - 4 * block.length - Buffer.byteLength(expected, "utf8"),
+    );
+    const text = "{{include:block.md}}".repeat(4) + padding + suffix;
+    assert.equal(
+      await expandIncludes(text, sources),
+      block.repeat(4) + padding + expected,
+    );
+    await assert.rejects(expandIncludes(text + "x", sources), /256 KiB limit/);
+  }
+});
+
+test("nested byte-limit errors retain the marker position, consumer and include chain", async (t) => {
+  const { sources } = await fixture(t);
+  await writeFile(join(sources, "full.md"), "x".repeat(65536));
+  await writeFile(
+    join(sources, "outer.md"),
+    "\n\n  " + "{{include:full.md}}\n".repeat(4),
+  );
+  const inventory = new Map(
+    ["outer.md", "full.md"].map((name) => [
+      name,
+      { root: sources, path: join(sources, name), relativePath: name },
+    ]),
+  );
+  await assert.rejects(
+    expand("{{include:outer.md}}", inventory, undefined, "agent review"),
+    {
+      name: "PromptComposerError",
+      message:
+        'The composed prompt exceeds the 256 KiB limit. Consumer: agent review. at "outer.md":6:1 Include chain: "outer.md" -> "full.md".',
+    },
+  );
 });
