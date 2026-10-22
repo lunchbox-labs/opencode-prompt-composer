@@ -6,18 +6,10 @@ import {
   discoverPrompts,
 } from "./discovery.ts";
 import { SettingsError } from "./errors.ts";
+import { MAX_SNIPPET_BYTES, type PromptDependency } from "./includes.ts";
 
-export interface SourceFile {
-  path: string;
-  text: string;
-  mode: number;
-  canonicalPath?: string;
-}
-
-const sourceByteLimit = 64 * 1024;
-
-function validateSourceText(text: string, limit = sourceByteLimit): void {
-  if (Buffer.byteLength(text, "utf8") > limit) {
+function validateSourceText(text: string): void {
+  if (Buffer.byteLength(text, "utf8") > MAX_SNIPPET_BYTES) {
     throw new SettingsError("A prompt source exceeds its size limit.");
   }
   if (text.includes("\0")) {
@@ -27,11 +19,10 @@ function validateSourceText(text: string, limit = sourceByteLimit): void {
 
 async function readSource(
   path: string,
-  limit = sourceByteLimit,
-): Promise<SourceFile> {
+): Promise<{ text: string; mode: number }> {
   try {
     const before = await lstat(path);
-    if (!before.isFile() || before.size > limit) {
+    if (!before.isFile() || before.size > MAX_SNIPPET_BYTES) {
       throw new SettingsError(
         "Prompt sources must be regular files within the size limit.",
       );
@@ -46,19 +37,19 @@ async function readSource(
         !current.isFile() ||
         current.ino !== before.ino ||
         current.dev !== before.dev ||
-        current.size > limit
+        current.size > MAX_SNIPPET_BYTES
       ) {
         throw new SettingsError(
           "A prompt source changed while loading. Try again.",
         );
       }
       const bytes = await file.readFile();
-      if (bytes.length > limit) {
+      if (bytes.length > MAX_SNIPPET_BYTES) {
         throw new SettingsError("A prompt source exceeds its size limit.");
       }
       const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-      validateSourceText(text, limit);
-      return { path, text, mode: current.mode & 0o777 };
+      validateSourceText(text);
+      return { text, mode: current.mode & 0o777 };
     } finally {
       await file.close();
     }
@@ -75,17 +66,14 @@ async function readSource(
   }
 }
 
-export async function verifyReads(files: SourceFile[]): Promise<void> {
+export async function verifyReads(files: PromptDependency[]): Promise<void> {
   for (const file of files) {
-    if (
-      file.canonicalPath !== undefined &&
-      (await realpath(file.path)) !== file.canonicalPath
-    ) {
+    if ((await realpath(file.path)) !== file.canonicalPath) {
       throw new SettingsError(
         `Prompt input changed: ${file.path}. Retry composition.`,
       );
     }
-    const current = await readSource(file.canonicalPath ?? file.path);
+    const current = await readSource(file.canonicalPath);
     if (current.text !== file.text || current.mode !== file.mode) {
       throw new SettingsError(
         `Prompt input changed: ${file.path}. Retry composition.`,

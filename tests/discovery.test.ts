@@ -34,34 +34,24 @@ async function fixture(t: TestContext) {
 
 test("mirrors pinned host root order and later relative-path overrides", async (t) => {
   const f = await fixture(t);
-  const result = await discoverPrompts(
+  for (const directory of f.roots.toReversed()) {
+    const result = await discoverPrompts(
+      { directory: f.nested, worktree: f.project },
+      f.env,
+    );
+    assert.deepEqual(result.directories, f.roots);
+    assert.deepEqual(result.files.get("review/evidence.md"), {
+      path: join(directory, "prompts/review/evidence.md"),
+      root: join(directory, "prompts"),
+      relativePath: "review/evidence.md",
+    });
+    await rm(join(directory, "prompts/review/evidence.md"));
+  }
+  const empty = await discoverPrompts(
     { directory: f.nested, worktree: f.project },
     f.env,
   );
-  assert.deepEqual(result.directories, f.roots);
-  assert.deepEqual(
-    result.candidates.get("review/evidence.md"),
-    f.roots.map((root) => join(root, "prompts/review/evidence.md")),
-  );
-  assert.equal(
-    result.files.get("review/evidence.md")?.path,
-    join(f.custom, "prompts/review/evidence.md"),
-  );
-  await rm(join(f.custom, "prompts/review/evidence.md"));
-  const fallback = await discoverPrompts(
-    { directory: f.nested, worktree: f.project },
-    f.env,
-  );
-  assert.deepEqual(
-    fallback.candidates.get("review/evidence.md"),
-    f.roots
-      .slice(0, -1)
-      .map((root) => join(root, "prompts/review/evidence.md")),
-  );
-  assert.equal(
-    fallback.files.get("review/evidence.md")?.path,
-    join(f.home, ".opencode/prompts/review/evidence.md"),
-  );
+  assert.equal(empty.files.size, 0);
 });
 
 test("project disable flag keeps global, home and custom discovery", async (t) => {
@@ -77,11 +67,9 @@ test("project disable flag keeps global, home and custom discovery", async (t) =
       [f.global, join(f.home, ".opencode"), f.custom],
       `project discovery disabled by ${value}`,
     );
-    assert.deepEqual(
-      result.candidates.get("review/evidence.md"),
-      [f.global, join(f.home, ".opencode"), f.custom].map((root) =>
-        join(root, "prompts/review/evidence.md"),
-      ),
+    assert.equal(
+      result.files.get("review/evidence.md")?.path,
+      join(f.custom, "prompts/review/evidence.md"),
     );
   }
 });
@@ -96,11 +84,9 @@ test("deduplicates repeated roots and respects worktree traversal boundary", asy
   );
   assert.deepEqual(result.directories, f.roots.slice(0, -1));
   assert.equal(result.files.has("outside.md"), false);
-  assert.deepEqual(
-    result.candidates.get("review/evidence.md"),
-    f.roots
-      .slice(0, -1)
-      .map((root) => join(root, "prompts/review/evidence.md")),
+  assert.equal(
+    result.files.get("review/evidence.md")?.path,
+    join(f.home, ".opencode/prompts/review/evidence.md"),
   );
 });
 
