@@ -16,10 +16,9 @@ import { setTimeout } from "node:timers/promises";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import {
+  exerciseAgentPromptViewer,
   exerciseConfigEditor,
-  exercisePromptEditor,
 } from "./native-editors.ts";
-import { readState } from "../src/runtime-state.ts";
 import { resolveNativeVersion, verifyNativeVersion } from "./native-host.ts";
 import { exerciseNativeTerminal } from "./native-terminal.ts";
 import { prepareRipgrep } from "./native-ripgrep.ts";
@@ -82,18 +81,6 @@ test(
       NO_PROXY: "localhost,127.0.0.1,::1",
       no_proxy: "localhost,127.0.0.1,::1",
     });
-    // The in-process TUI fixture must use the same discovery environment as the host.
-    for (const key of ["XDG_CONFIG_HOME", "OPENCODE_TEST_HOME"]) {
-      const previous = process.env[key];
-      process.env[key] = env[key];
-      t.after(() => {
-        if (previous === undefined) {
-          Reflect.deleteProperty(process.env, key);
-        } else {
-          process.env[key] = previous;
-        }
-      });
-    }
     await mkdir(join(root, "home"), { recursive: true });
     const installEnv = {
       ...process.env,
@@ -471,23 +458,22 @@ test(
       >;
       command: Record<string, { template: string; subtask: boolean }>;
     };
-    async function reload(): Promise<typeof config> {
-      const previous = readState(await api("/config"), project);
+    async function reload(
+      ready: (current: typeof config) => boolean,
+    ): Promise<typeof config> {
       await api("/instance/dispose", {});
-      // The host acknowledges dispose before teardown completes. Fixture-driven
-      // reloads must observe a new attested hook pass before using the instance.
+      // Disposal acknowledges before teardown finishes. Wait for the fixture's
+      // changed prompt/availability to prove the new composition is loaded.
       for (let attempt = 0; attempt < 300; attempt++) {
         const current = (await api("/config")) as typeof config;
-        try {
-          if (readState(current, project).id !== previous.id) {
-            return current;
-          }
-        } catch {
-          // Old or partially reset config is not evidence of a completed reload.
+        if (ready(current)) {
+          return current;
         }
         await setTimeout(50);
       }
-      throw new Error(`No fresh prompt runtime after disposal.\n${logs}`);
+      throw new Error(
+        `Changed prompts were not loaded after disposal.\n${logs}`,
+      );
     }
     assert.ok(
       tarballRequests > 0,
@@ -504,11 +490,6 @@ test(
     );
     assert.equal(config.command.check.subtask, true);
     assert.equal(await readFile(settingsPath, "utf8"), settingsText);
-    const baseline = readState(config, project);
-    assert.match(
-      baseline.native.agent?.review?.prompt ?? "",
-      /include:review\/body.md/,
-    );
     if (configPlugin !== undefined) {
       assert.equal(config.agent.review.model, "fixture/model", logs);
       assert.equal(config.agent.helper.disable, false);
@@ -518,15 +499,13 @@ test(
       );
       await exerciseConfigEditor(configPlugin, shared, api);
     }
-    await exercisePromptEditor(plugin, api, settingsPath).catch(
+    await exerciseAgentPromptViewer(plugin, api, settingsPath).catch(
       (error: unknown) => {
-        throw new Error(`Native prompt editor failed.\n${logs}`, {
+        throw new Error(`Native prompt viewer failed.\n${logs}`, {
           cause: error,
         });
       },
     );
-    await writeFile(settingsPath, settingsText);
-    await reload();
     const session = (await api("/session", {})) as { id: string };
     const message = await api(`/session/${session.id}/message`, {
       agent: "review",
@@ -542,7 +521,11 @@ test(
       join(project, ".opencode/prompts/review/nested.txt"),
       "updated",
     );
-    const reloaded = await reload();
+    const reloaded = await reload(
+      (current) =>
+        current.agent.review.prompt ===
+        "Use evidence.\n\nReview Project updated\n\nState uncertainty.",
+    );
     assert.equal(
       reloaded.agent.review.prompt,
       "Use evidence.\n\nReview Project updated\n\nState uncertainty.",
@@ -559,7 +542,9 @@ test(
       };
       profile.activeProfiles = [];
       await writeFile(profilePath, JSON.stringify(profile));
-      const cleared = await reload();
+      const cleared = await reload(
+        (current) => current.agent.helper.disable === true,
+      );
       assert.equal(cleared.agent.review.prompt, reloaded.agent.review.prompt);
       assert.equal(
         cleared.command.check.template,
@@ -571,9 +556,9 @@ test(
         "Help {{include:review/body.md}}",
       );
       await exerciseConfigEditor(configPlugin, shared, api);
-      await exercisePromptEditor(plugin, api, settingsPath).catch(
+      await exerciseAgentPromptViewer(plugin, api, settingsPath).catch(
         (error: unknown) => {
-          throw new Error(`Native prompt editor failed.\n${logs}`, {
+          throw new Error(`Native prompt viewer failed.\n${logs}`, {
             cause: error,
           });
         },
@@ -588,14 +573,20 @@ test(
         helperPath,
         helperText.replace("disable: true", "disable: false"),
       );
-      const enabled = await reload();
+      const enabled = await reload(
+        (current) =>
+          current.agent.helper.prompt ===
+          "Help Project updated\n\nState uncertainty.\n\nHelper rule.",
+      );
       assert.equal(enabled.agent.helper.disable, false);
       assert.equal(
         enabled.agent.helper.prompt,
         "Help Project updated\n\nState uncertainty.\n\nHelper rule.",
       );
       await writeFile(helperPath, helperText);
-      const disabled = await reload();
+      const disabled = await reload(
+        (current) => current.agent.helper.disable === true,
+      );
       assert.equal(disabled.agent.helper.disable, true);
       assert.equal(
         disabled.agent.helper.prompt,
@@ -611,7 +602,9 @@ test(
       "---\ndescription: Review changes\nmode: primary\n---\nReview";
     await writeFile(agentPath, commandOnlyAgentText);
     await writeFile(settingsPath, "{}");
-    const commandOnly = await reload();
+    const commandOnly = await reload(
+      (current) => current.agent.review.prompt === "Review",
+    );
     assert.equal(commandOnly.agent.review.prompt, "Review");
     assert.equal(
       commandOnly.command.check.template,
@@ -624,14 +617,18 @@ test(
     assert.equal(await readFile(agentPath, "utf8"), commandOnlyAgentText);
     assert.equal(await readFile(settingsPath, "utf8"), "{}");
     // Native npm TUI loading and the real terminal preview run on both operating
-    // systems, separately from the rendering-replaced editor checks above.
+    // systems, separately from the rendering-replaced viewer checks above.
     await writeFile(
       join(shared, "tui.jsonc"),
       JSON.stringify({ plugin: [npmPlugin] }),
     );
     await writeFile(agentPath, agentText);
     await writeFile(settingsPath, settingsText);
-    await reload();
+    await reload(
+      (current) =>
+        current.agent.review.prompt ===
+        "Use evidence.\n\nReview Project updated\n\nState uncertainty.",
+    );
     const terminalSession = (await api("/session", {})) as { id: string };
     const beforeTerminal = received.length;
     await exerciseNativeTerminal({

@@ -240,32 +240,14 @@ export async function exerciseNativeTerminal(options: {
       terminal.promptFocused,
       "main conversation input focus",
     );
-    terminal.write("/compose-prompts");
+    terminal.write("/agent-prompts");
     await terminal.waitFor(
-      () => terminal.echoed("/compose-prompts"),
+      () => terminal.echoed("/agent-prompts"),
       "slash command input echo",
     );
-    await terminal.wait("Compose prompts");
+    await terminal.wait("View agent prompts");
     terminal.write("\r");
-    await terminal.wait(
-      "Compose prompts",
-      "Edit prompt settings",
-      "Preview effective prompts",
-    );
-    await terminal.waitFor(terminal.focused, "focused Composer menu search");
-    const query = "Preview effective prompts";
-    terminal.write(`\x15${query}`);
-    await terminal.waitFor(
-      () => terminal.echoed(query),
-      "preview option query echo",
-    );
-    await terminal.wait("Preview effective prompts and notices");
-    await terminal.waitFor(
-      () => terminal.selected("Preview effective prompts and notices", query),
-      "highlighted preview option",
-    );
-    terminal.write("\r");
-    await terminal.wait("Effective prompts", "Agent: review");
+    await terminal.wait("Loaded agent prompts", "Agent: review");
     for (const label of ["Agent: review", "Page 1 of 1"]) {
       await terminal.waitFor(
         terminal.focused,

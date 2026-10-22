@@ -23,6 +23,7 @@ function harness(decoration?: DialogDecoration) {
     current = props;
   };
   const api = {
+    state: { path: { directory: "/project/nested", worktree: "/project" } },
     lifecycle: { signal: controller.signal },
     client: {},
     route: { current: { name: "session", params: { sessionID: "first" } } },
@@ -172,6 +173,8 @@ test("closing a panel never resurrects parents after another dialog, route, clie
     "dialog",
     "route",
     "client",
+    "directory",
+    "worktree",
     "abort",
     "close",
   ] as const) {
@@ -190,6 +193,9 @@ test("closing a panel never resurrects parents after another dialog, route, clie
     }
     if (change === "client") {
       Object.assign(view.api, { client: {} });
+    }
+    if (change === "directory" || change === "worktree") {
+      view.api.state.path[change] = "/other";
     }
     if (change === "abort") {
       view.controller.abort();

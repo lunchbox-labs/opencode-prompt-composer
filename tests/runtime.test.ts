@@ -313,3 +313,29 @@ test("inactive settings fragments and skill output have honest consumer context"
     },
   );
 });
+
+test("config composition preserves plugin registration without publishing editor state", async (t) => {
+  const { root } = await fixture(t, {});
+  const hooks = await server.server({
+    directory: root,
+    worktree: root,
+  } as PluginInput);
+  const config: Config = {
+    plugin: ["@lunchbox-labs/opencode-prompt-composer"],
+    agent: { review: { prompt: "Text" } },
+  };
+  const registration = structuredClone(config.plugin);
+  await hooks.config!(config);
+  assert.deepEqual(config.plugin, registration);
+});
+
+test("removed editor reload tokens are not accepted as plugin options", async (t) => {
+  const { root } = await fixture(t, {});
+  assert.throws(
+    () =>
+      server.server({ directory: root, worktree: root } as PluginInput, {
+        reloadToken: "old-editor-token",
+      }),
+    /does not accept plugin options/,
+  );
+});

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import type {
@@ -8,19 +8,17 @@ import type {
   TuiPluginMeta,
   TuiPluginModule,
 } from "@opencode-ai/plugin/tui";
-import { captureFilesystem } from "../src/filesystem.ts";
 
 export type Request = (path: string, body?: unknown) => Promise<unknown>;
 interface View {
   title: string;
   options?: { title: string; value: string }[];
   onSelect?: (item: { title: string; value: string }) => void;
-  onConfirm?: (text?: string) => void;
   message?: string;
 }
 
-/** Real installed TUI actions and native HTTP client; only terminal rendering is replaced. */
-export async function exercisePromptEditor(
+/** Installed viewer and native HTTP client; only terminal rendering is replaced. */
+export async function exerciseAgentPromptViewer(
   plugin: string,
   request: Request,
   settingsPath: string,
@@ -29,9 +27,15 @@ export async function exercisePromptEditor(
     pathToFileURL(join(plugin, "dist/tui.js")).href
   )) as { default: TuiPluginModule };
   const path = await request("/path");
-  const commands = new Map<string, () => void>();
+  const config = (await request("/config")) as {
+    agent: Record<string, { prompt?: string; disable?: boolean }>;
+    command: Record<string, { template: string }>;
+  };
+  const saved = await readFile(settingsPath, "utf8");
+  let open = () => {};
   let current: View | undefined;
   let closed: (() => void) | undefined;
+  let reads = 0;
   const render = (view: View) => {
     current = view;
   };
@@ -40,44 +44,28 @@ export async function exercisePromptEditor(
     lifecycle: { signal: new AbortController().signal, onDispose() {} },
     route: { current: { name: "home" } },
     keymap: {
-      registerLayer(layer: { commands: { name: string; run: () => void }[] }) {
-        for (const command of layer.commands) {
-          commands.set(command.name, command.run);
-        }
+      registerLayer(layer: {
+        commands: { slashName: string; run: () => void }[];
+      }) {
+        assert.deepEqual(
+          layer.commands.map((command) => command.slashName),
+          ["agent-prompts"],
+        );
+        open = layer.commands[0].run;
         return () => {};
       },
     },
     client: {
-      file: {
-        async read(input: { path: string }) {
-          return {
-            data: await request(
-              `/file/content?path=${encodeURIComponent(input.path)}`,
-            ),
-          };
-        },
-      },
       config: {
         async get() {
+          reads++;
           return { data: await request("/config") };
-        },
-      },
-      session: {
-        async status() {
-          return { data: await request("/session/status") };
-        },
-      },
-      instance: {
-        async dispose() {
-          return { data: await request("/instance/dispose", {}) };
         },
       },
     },
     ui: {
       DialogSelect: render,
       DialogAlert: render,
-      DialogConfirm: render,
-      DialogPrompt: render,
       dialog: {
         replace(next: () => void, onClose?: () => void) {
           closed?.();
@@ -109,103 +97,39 @@ export async function exercisePromptEditor(
     assert.equal(
       current?.title,
       title,
-      `${current?.message ?? ""}\nHost path: ${JSON.stringify(path)}\nRuntime: ${current?.title === "Prompt Composer" ? JSON.stringify(await request("/config")) : ""}\nLocal filesystem: ${current?.title === "Prompt Composer" ? JSON.stringify(await captureFilesystem({ root: api.state.path.worktree === "/" ? api.state.path.directory : api.state.path.worktree, directory: api.state.path.directory, worktree: api.state.path.worktree })) : ""}`,
+      `${current?.message ?? ""} Host path: ${JSON.stringify(path)}`,
     );
     return current;
   }
   function choose(value: string) {
     const item = current?.options?.find((item) => item.value === value);
-    assert.ok(item !== undefined);
+    assert.ok(
+      item !== undefined,
+      `Missing ${value} in ${JSON.stringify(current)}`,
+    );
     current?.onSelect?.(item);
   }
-  commands.get("prompt-composer.compose")!();
-  await view("Compose prompts");
-  choose("files");
-  await view("Prompt files");
-  choose("review/body.md");
-  assert.match(
-    (await view("Prompt file source")).message ?? "",
-    /\{\{include:review\/body.md\}\}/,
-  );
-  api.ui.dialog.clear();
-  await view("Prompt files");
-  choose("\u0000back");
-  await view("Compose prompts");
-  choose("edit");
-  await view("Prompt settings source");
-  choose(settingsPath);
-  await view("Edit prompt settings");
-  choose("agents");
-  (await view("Agent fragments and default inheritance")).onConfirm?.(
-    '{"review":{"append":["Editor verified."]}}',
-  );
-  const preview = await view("Save prompt changes?");
-  assert.match(preview.message ?? "", /Editor verified/);
-  preview.onConfirm?.();
-  api.ui.dialog.clear();
-  await view("Prompt settings saved");
-  const saved = await readFile(settingsPath, "utf8");
-  assert.match(saved, /Editor verified/);
-  const running = await request("/config");
-  const snippetPath = join(dirname(settingsPath), "prompts/review/body.md");
-  const snippet = await readFile(snippetPath, "utf8");
-  const changedSnippet = `  ${snippet}\nSAVED SNIPPET\n\n`;
-  await writeFile(snippetPath, changedSnippet);
-  commands.get("prompt-composer.compose")!();
-  await view("Compose prompts");
-  choose("saved-preview");
-  choose("saved-preview");
-  await view("Saved prompt changes — not applied");
-  choose("agent:review");
-  const savedPages = await view("Agent: review — not applied — pages");
-  const savedText: string[] = [];
-  const pages = savedPages.options!.filter(
-    (item) => item.value !== "\u0000back",
-  );
-  for (const [index, page] of pages.entries()) {
-    choose(page.value);
-    savedText.push(
-      (
-        await view(
-          `Agent: review — not applied — page ${index + 1}/${pages.length}`,
-        )
-      ).message!,
+  open();
+  const menu = await view("Loaded agent prompts");
+  assert.ok(menu.options!.every((item) => item.value.startsWith("agent:")));
+  if (config.agent.helper.disable === true) {
+    assert.equal(
+      menu.options!.find((item) => item.value === "agent:helper")?.title,
+      "Agent: helper (disabled)",
     );
-    api.ui.dialog.clear();
-    await view("Agent: review — not applied — pages");
   }
-  assert.match(savedText.join(""), /Editor verified/);
-  assert.match(savedText.join(""), /SAVED SNIPPET\n\n/);
-  choose("\u0000back");
-  await view("Saved prompt changes — not applied");
-  choose("\u0000back");
-  await view("Compose prompts");
-  api.ui.dialog.clear();
-  assert.deepEqual(await request("/config"), running);
-  assert.equal(await readFile(settingsPath, "utf8"), saved);
-  assert.equal(await readFile(snippetPath, "utf8"), changedSnippet);
-  await writeFile(snippetPath, snippet);
-  current = undefined;
-  commands.get("prompt-composer.compose")!();
-  await view("Compose prompts");
-  choose("apply");
-  await view("Prompt settings applied");
-  const config = (await request("/config")) as {
-    agent: Record<string, { prompt?: string }>;
-    command: Record<string, { template: string }>;
-  };
-  assert.match(config.agent.review.prompt ?? "", /Editor verified/);
-  commands.get("prompt-composer.compose")!();
-  await view("Compose prompts");
-  choose("preview");
-  await view("Effective prompts");
   for (const [value, title, expected] of [
     ["agent:review", "Agent: review", config.agent.review.prompt],
-    ["command:check", "Command: check", config.command.check.template],
+    [
+      "agent:helper",
+      `Agent: helper${config.agent.helper.disable === true ? " (disabled)" : ""}`,
+      config.agent.helper.prompt,
+    ],
   ]) {
     choose(value!);
-    const menu = await view(`${title} — pages`);
-    const pages = menu.options!.filter((item) => item.value !== "\u0000back");
+    const pages = (await view(`${title} — pages`)).options!.filter(
+      (item) => item.value !== "\u0000back",
+    );
     const text: string[] = [];
     for (const [index, page] of pages.entries()) {
       choose(page.value);
@@ -217,10 +141,13 @@ export async function exercisePromptEditor(
     }
     assert.equal(text.join(""), expected);
     choose("\u0000back");
-    await view("Effective prompts");
+    await view("Loaded agent prompts");
   }
-  choose("\u0000back");
-  await view("Compose prompts");
+  api.ui.dialog.clear();
+  await Promise.resolve();
+  assert.equal(current, undefined);
+  assert.equal(reads, 1);
+  assert.deepEqual(await request("/config"), config);
   assert.equal(await readFile(settingsPath, "utf8"), saved);
 }
 

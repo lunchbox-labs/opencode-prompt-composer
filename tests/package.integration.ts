@@ -27,6 +27,20 @@ test(
     }[];
     assert.ok(files.some((file) => file.path === "dist/server.d.ts"));
     assert.ok(files.some((file) => file.path === "LICENSE"));
+    for (const removed of [
+      "editor",
+      "connection",
+      "filesystem",
+      "runtime-state",
+      "registration",
+      "saved-preview",
+    ]) {
+      assert.ok(
+        !files.some((file) => file.path.startsWith(`dist/${removed}.`)),
+        `Removed editor module is still packed: ${removed}`,
+      );
+    }
+
     for (const path of [
       "README.md",
       "docs/examples/review/.opencode/agents/review.md",
@@ -73,6 +87,7 @@ import tui from '@lunchbox-labs/opencode-prompt-composer/tui';
 import schema from '@lunchbox-labs/opencode-prompt-composer/schema.json' with { type: 'json' };
 assert.equal(tui.id, 'prompt-composer');
 assert.equal(schema.additionalProperties, false);
+await assert.rejects(import('@lunchbox-labs/opencode-prompt-composer/editor'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 const hooks = await plugin.server({ directory: process.argv[2], worktree: process.argv[2] });
 const config = { agent: { review: { prompt: '{{include:rules.md}}' } } };
 await hooks.config(config);
