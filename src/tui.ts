@@ -1,15 +1,12 @@
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui";
 import { dialogNavigation } from "./navigation.ts";
 import { previewPages } from "./preview.ts";
-import { promptReload } from "./reload.ts";
 
 const PromptComposerTui: TuiPlugin = (api) => {
   const navigation = dialogNavigation(api);
-  const reload = promptReload(api, navigation);
   const stopWatching = api.event.on("server.instance.disposed", (event) => {
     if (
       event.properties.directory === api.state.path.directory &&
-      !reload.active &&
       navigation.active
     ) {
       navigation.close();
@@ -114,7 +111,6 @@ const PromptComposerTui: TuiPlugin = (api) => {
         [
           { title: "Agents", value: "agents" },
           { title: "Commands", value: "commands" },
-          { title: "Reload prompts", value: "reload" },
         ],
         (value) => {
           if (value === "agents") {
@@ -129,8 +125,6 @@ const PromptComposerTui: TuiPlugin = (api) => {
               commands,
               "No configured command templates",
             );
-          } else if (value === "reload") {
-            reload.run().catch(console.error);
           }
         },
         true,
@@ -149,14 +143,9 @@ const PromptComposerTui: TuiPlugin = (api) => {
                     ? error.message
                     : "Could not read loaded prompts.",
               },
-              { title: "Reload prompts", value: "reload" },
             ],
-            onSelect: (selected) => {
-              if (selected.value === "reload") {
-                reload.run().catch(console.error);
-              } else {
-                open().catch(console.error);
-              }
+            onSelect: () => {
+              open().catch(console.error);
             },
           },
           true,
@@ -174,14 +163,6 @@ const PromptComposerTui: TuiPlugin = (api) => {
         slashName: "view-prompts",
         // Native command dispatch clears its picker after invoking the handler.
         run: () => Promise.resolve().then(open),
-      },
-      {
-        name: "prompt-composer.reload-prompts",
-        title: "Reload prompts",
-        namespace: "palette",
-        category: "Prompts",
-        slashName: "reload-prompts",
-        run: () => Promise.resolve().then(reload.run),
       },
     ],
   });

@@ -1,10 +1,8 @@
 import type { Config, Hooks, Plugin, PluginModule } from "@opencode-ai/plugin";
-import { expandIncludes } from "./includes.ts";
 import { SettingsError } from "./errors.ts";
-import { discoverPrompts } from "./discovery.ts";
 import { compose } from "./runtime.ts";
-import { verifyInventory, verifyReads } from "./read-consistency.ts";
 import { expandSkillBody } from "./skill-body.ts";
+import { startupSnippets } from "./startup-snippets.ts";
 
 interface Bodies {
   agents: Record<string, string>;
@@ -33,6 +31,7 @@ const PromptComposer: Plugin = (input, options = {}) => {
     directory: input.directory,
     worktree: input.worktree,
   };
+  const startup = startupSnippets(context);
   const snapshots = new WeakMap<object, { native: Bodies; applied: Bodies }>();
   return Promise.resolve({
     config: async (config) => {
@@ -57,20 +56,17 @@ const PromptComposer: Plugin = (input, options = {}) => {
           }
         }
       }
-      const inventory = await discoverPrompts(context);
-      const composed = await compose(native, inventory);
-      await verifyReads(composed.reads);
-      await verifyInventory(context, inventory);
+      const composed = await compose(native, await startup);
       // Publish only once the entire composition succeeds. Preserve all host metadata.
-      if (composed.config.agent !== undefined) {
-        config.agent = composed.config.agent;
+      if (composed.agent !== undefined) {
+        config.agent = composed.agent;
       }
-      if (composed.config.command !== undefined) {
-        config.command = composed.config.command;
+      if (composed.command !== undefined) {
+        config.command = composed.command;
       }
       snapshots.set(config, {
         native: bodies(native),
-        applied: bodies(composed.config),
+        applied: bodies(composed),
       });
     },
     "tool.execute.after": async (input, output) => {
@@ -81,11 +77,8 @@ const PromptComposer: Plugin = (input, options = {}) => {
         output.output,
         output.metadata,
         async (body) => {
-          const inventory = await discoverPrompts(context);
-          return expandIncludes(
+          return (await startup)(
             body,
-            inventory.files,
-            undefined,
             "skill output (source file unavailable)",
           );
         },

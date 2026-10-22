@@ -28,7 +28,7 @@ const npm = process.env.npm_execpath;
 assert.ok(npm !== undefined, "Run native tests through npm");
 
 test(
-  "npm-registered native hooks preserve authored files, reload, discover overrides and compose on-demand skills",
+  "npm-registered native hooks retain snippets until process restart and compose native skills",
   { timeout: 600_000 },
   async (t) => {
     const root = await realpath(
@@ -187,6 +187,14 @@ test(
       join(project, ".opencode/prompts/review/nested.txt"),
       "evidence",
     );
+    const skillOnlyPath = join(project, ".opencode/prompts/review/skill.txt");
+    const deletedPath = join(project, ".opencode/prompts/review/deleted.txt");
+    await writeFile(skillOnlyPath, "Skill-only original");
+    await writeFile(deletedPath, "Deleted original");
+    await writeFile(
+      join(shared, "prompts/review/override.txt"),
+      "Global original",
+    );
     const agentPath = join(project, ".opencode/agents/review.md");
     const agentText =
       "---\ndescription: Review changes\nmode: primary\n---\nUse evidence.\n\nReview {{include:review/body.md}}\n\nState uncertainty.";
@@ -200,8 +208,13 @@ test(
       "---\ndescription: Native command\nagent: review\nsubtask: true\n---\nCheck {{include:review/body.md}} $ARGUMENTS \\{{include:literal.md}}",
     );
     const skillDirectory = join(project, ".opencode/skills/evidence");
-    const skillBody =
-      "Skill {{include:review/body.md}}\n\\{{include:literal.md}}";
+    const skillBody = [
+      "Skill {{include:review/body.md}}",
+      "{{include:review/skill.txt}}",
+      "{{include:review/deleted.txt}}",
+      "{{include:review/override.txt}}",
+      "\\{{include:literal.md}}",
+    ].join("\n");
     const skillText = `---\nname: evidence\ndescription: Evidence checklist\n---\n${skillBody}`;
     await writeFile(join(skillDirectory, "SKILL.md"), skillText);
     // Colons are not valid in Windows filenames; unit tests cover Windows-shaped
@@ -372,61 +385,70 @@ test(
         { cwd: directory, env: installEnv, timeout: 120_000, signal: t.signal },
       );
     }
-    t.signal.throwIfAborted();
-    const child = spawn(
-      binary,
-      ["serve", "--hostname", "127.0.0.1", "--port", "0", "--print-logs"],
-      {
-        cwd: project,
-        env,
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: process.platform !== "win32",
-      },
-    );
-    let output = "";
     let logs = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      logs += chunk.toString();
-    });
-    stopHost = async () => {
-      if (
-        child.pid !== undefined &&
-        child.exitCode === null &&
-        child.signalCode === null
-      ) {
-        const exited = once(child, "exit");
-        if (process.platform === "win32") {
-          await execute("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
-            timeout: 10_000,
-          }).catch(() => undefined);
-        } else {
-          try {
-            process.kill(-child.pid, "SIGTERM");
-          } catch {
-            /* Already stopped. */
-          }
-        }
-        await Promise.race([
-          exited,
-          setTimeout(5000, undefined, { ref: false }),
-        ]);
-      }
-    };
     let url: string | undefined;
-    for (let n = 0; n < 600; n++) {
-      url = /https?:\/\/127\.0\.0\.1:\d+/.exec(output)?.[0];
-      if (url !== undefined) {
-        break;
+    async function startHost() {
+      t.signal.throwIfAborted();
+      const child = spawn(
+        binary,
+        ["serve", "--hostname", "127.0.0.1", "--port", "0", "--print-logs"],
+        {
+          cwd: project,
+          env,
+          stdio: ["ignore", "pipe", "pipe"],
+          detached: process.platform !== "win32",
+        },
+      );
+      let output = "";
+      child.stdout.on("data", (chunk: Buffer) => {
+        output += chunk.toString();
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        logs += chunk.toString();
+      });
+      stopHost = async () => {
+        if (
+          child.pid !== undefined &&
+          child.exitCode === null &&
+          child.signalCode === null
+        ) {
+          const exited = once(child, "exit");
+          if (process.platform === "win32") {
+            await execute("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+              timeout: 10_000,
+            }).catch(() => undefined);
+          } else {
+            try {
+              process.kill(-child.pid, "SIGTERM");
+            } catch {
+              /* Already stopped. */
+            }
+          }
+          await Promise.race([
+            exited,
+            setTimeout(5000, undefined, { ref: false }),
+          ]);
+        }
+        assert.ok(
+          child.exitCode !== null || child.signalCode !== null,
+          "The previous native host must exit before a fresh process starts",
+        );
+      };
+      url = undefined;
+      for (let n = 0; n < 600; n++) {
+        t.signal.throwIfAborted();
+        url = /https?:\/\/127\.0\.0\.1:\d+/.exec(output)?.[0];
+        if (url !== undefined) {
+          break;
+        }
+        if (child.exitCode !== null) {
+          throw new Error(`OpenCode exited: ${logs}`);
+        }
+        await setTimeout(100);
       }
-      if (child.exitCode !== null) {
-        throw new Error(`OpenCode exited: ${logs}`);
-      }
-      await setTimeout(100);
+      assert.ok(url !== undefined, `OpenCode did not start: ${logs}`);
     }
-    assert.ok(url !== undefined, `OpenCode did not start: ${logs}`);
+    await startHost();
     async function api(path: string, body?: unknown): Promise<unknown> {
       const response = await fetch(`${url}${path}`, {
         method: body === undefined ? "GET" : "POST",
@@ -464,12 +486,12 @@ test(
       >;
       command: Record<string, { template: string; subtask: boolean }>;
     };
-    async function reload(
+    async function disposeInstance(
       ready: (current: typeof config) => boolean,
     ): Promise<typeof config> {
       await api("/instance/dispose", {});
       // Disposal acknowledges before teardown finishes. Wait for the fixture's
-      // changed prompt/availability to prove the new composition is loaded.
+      // changed native body/availability to prove the replacement is loaded.
       for (let attempt = 0; attempt < 300; attempt++) {
         const current = (await api("/config")) as typeof config;
         if (ready(current)) {
@@ -525,44 +547,75 @@ test(
         });
       },
     );
-    const session = (await api("/session", {})) as { id: string };
-    const message = await api(`/session/${session.id}/message`, {
-      agent: "review",
-      model: { providerID: "fixture", modelID: "model" },
-      parts: [{ type: "text", text: "Load evidence now." }],
-    });
-    assert.match(JSON.stringify(message), /Verified/);
-    assert.ok(
-      received.some((body) => body.includes("Skill Project evidence")),
-      `${logs}\nFixture model requests: ${JSON.stringify(received)}\nSession messages: ${JSON.stringify(await api(`/session/${session.id}/message`))}`,
+    async function exerciseSkill(expectedBody: string) {
+      const before = received.length;
+      const session = (await api("/session", {})) as { id: string };
+      const message = await api(`/session/${session.id}/message`, {
+        agent: "review",
+        model: { providerID: "fixture", modelID: "model" },
+        parts: [{ type: "text", text: "Load evidence now." }],
+      });
+      assert.match(JSON.stringify(message), /Verified/);
+      const toolMessages = received.slice(before).flatMap((body) =>
+        (
+          JSON.parse(body) as {
+            messages: { role: string; content: string }[];
+          }
+        ).messages.filter((message) => message.role === "tool"),
+      );
+      assert.ok(
+        toolMessages.some(
+          (message) =>
+            message.content ===
+            [
+              '<skill_content name="evidence">',
+              "# Skill: evidence",
+              "",
+              expectedBody,
+              "",
+              `Base directory for this skill: ${skillDirectory}`,
+              "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
+              "Note: file list is sampled.",
+              "",
+              "<skill_files>",
+              `<file>${skillFile}</file>`,
+              "</skill_files>",
+              "</skill_content>",
+            ].join("\n"),
+        ),
+        `${logs}\nTool results: ${JSON.stringify(toolMessages)}\nSession messages: ${JSON.stringify(await api(`/session/${session.id}/message`))}`,
+      );
+    }
+    // The first skill-tool invocation happens only after these edits. Config
+    // loading must already have captured snippets unused by agents/commands.
+    await writeFile(
+      join(project, ".opencode/prompts/review/nested.txt"),
+      "updated",
     );
-    const toolMessages = received.flatMap((body) =>
-      (
-        JSON.parse(body) as { messages: { role: string; content: string }[] }
-      ).messages.filter((message) => message.role === "tool"),
+    await writeFile(skillOnlyPath, "Skill-only updated");
+    await rm(deletedPath);
+    await writeFile(
+      join(project, ".opencode/prompts/review/override.txt"),
+      "Project added",
     );
-    assert.ok(
-      toolMessages.some(
-        (message) =>
-          message.content ===
-          [
-            '<skill_content name="evidence">',
-            "# Skill: evidence",
-            "",
-            "Skill Project evidence\n{{include:literal.md}}",
-            "",
-            `Base directory for this skill: ${skillDirectory}`,
-            "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
-            "Note: file list is sampled.",
-            "",
-            "<skill_files>",
-            `<file>${skillFile}</file>`,
-            "</skill_files>",
-            "</skill_content>",
-          ].join("\n"),
-      ),
-      JSON.stringify(toolMessages),
+    await writeFile(
+      join(project, ".opencode/prompts/literal.md"),
+      "An escaped marker must never expand twice.",
     );
+    const subsequent = (await api("/config")) as typeof config;
+    assert.equal(subsequent.agent.review.prompt, config.agent.review.prompt);
+    assert.equal(
+      subsequent.command.check.template,
+      config.command.check.template,
+    );
+    const originalSkill = [
+      "Skill Project evidence",
+      "Skill-only original",
+      "Deleted original",
+      "Global original",
+      "{{include:literal.md}}",
+    ].join("\n");
+    await exerciseSkill(originalSkill);
     assert.equal(
       await readFile(join(skillDirectory, "SKILL.md"), "utf8"),
       skillText,
@@ -604,22 +657,35 @@ test(
           !JSON.stringify(message.content).includes("Skill Project evidence"),
       ),
     );
-    await writeFile(
-      join(project, ".opencode/prompts/review/nested.txt"),
-      "updated",
+    const changedAgentText = agentText.replace(
+      "Use evidence.",
+      "Use native changes.",
     );
-    const reloaded = await reload(
+    const changedSkillText = skillText.replace(
+      "Skill {{include:review/body.md}}",
+      "Native skill {{include:review/body.md}}",
+    );
+    await writeFile(agentPath, changedAgentText);
+    await writeFile(join(skillDirectory, "SKILL.md"), changedSkillText);
+    const reloaded = await disposeInstance(
       (current) =>
         current.agent.review.prompt ===
-        "Use evidence.\n\nReview Project updated\n\nState uncertainty.",
+        "Use native changes.\n\nReview Project evidence\n\nState uncertainty.",
     );
     assert.equal(
       reloaded.agent.review.prompt,
-      "Use evidence.\n\nReview Project updated\n\nState uncertainty.",
+      "Use native changes.\n\nReview Project evidence\n\nState uncertainty.",
     );
     assert.equal(
       reloaded.command.check.template,
-      "Check Project updated $ARGUMENTS {{include:literal.md}}",
+      "Check Project evidence $ARGUMENTS {{include:literal.md}}",
+    );
+    await exerciseSkill(
+      originalSkill.replace("Skill Project", "Native skill Project"),
+    );
+    assert.equal(
+      await readFile(join(skillDirectory, "SKILL.md"), "utf8"),
+      changedSkillText,
     );
     assert.equal(await readFile(obsoletePath, "utf8"), obsoleteText);
     if (configPlugin !== undefined) {
@@ -629,7 +695,7 @@ test(
       };
       profile.activeProfiles = [];
       await writeFile(profilePath, JSON.stringify(profile));
-      const cleared = await reload(
+      const cleared = await disposeInstance(
         (current) => current.agent.helper.disable === true,
       );
       assert.equal(cleared.agent.review.prompt, reloaded.agent.review.prompt);
@@ -653,18 +719,18 @@ test(
         helperPath,
         helperText.replace("disable: true", "disable: false"),
       );
-      const enabled = await reload(
+      const enabled = await disposeInstance(
         (current) =>
           current.agent.helper.prompt ===
-          "Help Project updated\n\nState uncertainty.\n\nHelper rule.",
+          "Help Project evidence\n\nState uncertainty.\n\nHelper rule.",
       );
       assert.equal(enabled.agent.helper.disable, false);
       assert.equal(
         enabled.agent.helper.prompt,
-        "Help Project updated\n\nState uncertainty.\n\nHelper rule.",
+        "Help Project evidence\n\nState uncertainty.\n\nHelper rule.",
       );
       await writeFile(helperPath, helperText);
-      const disabled = await reload(
+      const disabled = await disposeInstance(
         (current) => current.agent.helper.disable === true,
       );
       assert.equal(disabled.agent.helper.disable, true);
@@ -681,20 +747,20 @@ test(
       },
     );
     // Check authored files before fixture writes can hide a plugin mutation.
-    assert.equal(await readFile(agentPath, "utf8"), agentText);
+    assert.equal(await readFile(agentPath, "utf8"), changedAgentText);
     assert.equal(await readFile(helperPath, "utf8"), helperText);
 
     // Command-only includes work without includes in the active agent body.
     const commandOnlyAgentText =
       "---\ndescription: Review changes\nmode: primary\n---\nReview";
     await writeFile(agentPath, commandOnlyAgentText);
-    const commandOnly = await reload(
+    const commandOnly = await disposeInstance(
       (current) => current.agent.review.prompt === "Review",
     );
     assert.equal(commandOnly.agent.review.prompt, "Review");
     assert.equal(
       commandOnly.command.check.template,
-      "Check Project updated $ARGUMENTS {{include:literal.md}}",
+      "Check Project evidence $ARGUMENTS {{include:literal.md}}",
     );
     if (configPlugin !== undefined) {
       await exerciseConfigEditor(configPlugin, shared, api);
@@ -708,20 +774,39 @@ test(
       JSON.stringify({ plugin: [npmPlugin] }),
     );
     await writeFile(agentPath, agentText);
-    await reload(
-      (current) =>
-        current.agent.review.prompt ===
-        "Use evidence.\n\nReview Project updated\n\nState uncertainty.",
+    const restartedSkillText = changedSkillText.replace(
+      "{{include:review/deleted.txt}}\n",
+      "",
+    );
+    await writeFile(join(skillDirectory, "SKILL.md"), restartedSkillText);
+    // A real new host process must read the changed snapshot. Reusing the same
+    // package registration and filesystem avoids a module-query cache reset.
+    await stopHost();
+    await startHost();
+    const restarted = (await api("/config")) as typeof config;
+    assert.equal(
+      restarted.agent.review.prompt,
+      "Use evidence.\n\nReview Project updated\n\nState uncertainty.",
+    );
+    assert.equal(
+      restarted.command.check.template,
+      "Check Project updated $ARGUMENTS {{include:literal.md}}",
+    );
+    await exerciseSkill(
+      [
+        "Native skill Project updated",
+        "Skill-only updated",
+        "Project added",
+        "{{include:literal.md}}",
+      ].join("\n"),
+    );
+    assert.equal(
+      await readFile(join(skillDirectory, "SKILL.md"), "utf8"),
+      restartedSkillText,
     );
     const terminalSession = (await api("/session", {})) as { id: string };
-    let beforeTerminal = received.length;
-    let expectedAgent = "";
-    let expectedCommand = "";
-    let expectedSkill = "";
-    let expectedNested = "";
-    let expectedGlobal = "";
-    let expectedProject = "";
-    let terminalModelRequests = 0;
+    const beforeTerminal = received.length;
+    assert.ok(url !== undefined);
     await exerciseNativeTerminal({
       binary,
       url,
@@ -729,190 +814,14 @@ test(
       project,
       env,
       signal: t.signal,
-      async editPrompts(stage) {
-        assert.equal(
-          received.length,
-          beforeTerminal,
-          "Viewing prompts must not send a model request",
-        );
-        if (stage === "broken") {
-          await writeFile(
-            agentPath,
-            expectedAgent.replace("review/body.md", "missing.md"),
-          );
-          return;
-        }
-        expectedAgent = agentText.replace(
-          "Review {{include:",
-          `${stage} agent {{include:`,
-        );
-        expectedCommand = `---\ndescription: Native command\nagent: review\nsubtask: true\n---\n${stage} command {{include:review/body.md}} $ARGUMENTS \\{{include:literal.md}}`;
-        expectedSkill = `---\nname: evidence\ndescription: Evidence checklist\n---\n${stage} skill {{include:review/body.md}}\n\\{{include:literal.md}}`;
-        expectedNested = stage;
-        await writeFile(agentPath, expectedAgent);
-        await writeFile(
-          join(project, ".opencode/commands/check.md"),
-          expectedCommand,
-        );
-        await writeFile(join(skillDirectory, "SKILL.md"), expectedSkill);
-        await writeFile(
-          join(project, ".opencode/prompts/review/nested.txt"),
-          expectedNested,
-        );
-        // Global JSON is process-cached by the supported host. Instance reload
-        // must not pretend to invalidate it or rewrite it as a workaround.
-        const globalPath = join(shared, "opencode.jsonc");
-        const globalConfig = JSON.parse(await readFile(globalPath, "utf8")) as {
-          default_agent: string;
-        };
-        globalConfig.default_agent = "build";
-        expectedGlobal = JSON.stringify(globalConfig);
-        await writeFile(globalPath, expectedGlobal);
-        // Project JSON is reread on instance load, unlike ordinary global JSON.
-        expectedProject = JSON.stringify({
-          $schema: "https://opencode.ai/config.json",
-          command: {
-            project_json: {
-              template: `${stage} JSON {{include:review/body.md}}`,
-            },
-          },
-        });
-        await writeFile(join(project, "opencode.jsonc"), expectedProject);
-      },
-      async verifyReload(stage) {
-        assert.equal(
-          received.length,
-          beforeTerminal,
-          "Reloading prompts must not send a model request",
-        );
-        const loaded = (await api("/config")) as typeof config & {
-          default_agent: string;
-        };
-        if (stage === "broken") {
-          try {
-            assert.ok(
-              loaded.agent.review.prompt.includes("{{include:missing.md}}"),
-              "OpenCode swallows the failed composition hook and returns native uncomposed text",
-            );
-            assert.ok(
-              loaded.command.check.template.includes(
-                "{{include:review/body.md}}",
-              ),
-              "Failed composition must publish no partial agent/command results",
-            );
-            assert.match(logs, /missing\.md/);
-          } finally {
-            await writeFile(agentPath, expectedAgent);
-          }
-          return;
-        }
-        assert.equal(
-          loaded.agent.review.prompt,
-          `Use evidence.\n\n${stage} agent Project ${stage}\n\nState uncertainty.`,
-        );
-        assert.equal(
-          loaded.command.check.template,
-          `${stage} command Project ${stage} $ARGUMENTS {{include:literal.md}}`,
-        );
-        assert.equal(
-          loaded.default_agent,
-          "review",
-          "Current-instance disposal does not invalidate process-cached global JSON",
-        );
-        assert.equal(
-          loaded.command.project_json.template,
-          `${stage} JSON Project ${stage}`,
-          "Current-instance reload rereads and composes added or edited project JSON",
-        );
-        const commands = (await api("/command")) as {
-          name: string;
-          template: string;
-        }[];
-        assert.ok(
-          commands
-            .find((command) => command.name === "evidence")
-            ?.template.startsWith(
-              `${stage} skill {{include:review/body.md}}`,
-            ) === true,
-          "Native skill cache must reread SKILL.md",
-        );
-        const session = (await api("/session", {})) as { id: string };
-        const start = received.length;
-        const message = await api(`/session/${session.id}/message`, {
-          agent: "review",
-          model: { providerID: "fixture", modelID: "model" },
-          parts: [{ type: "text", text: "Load evidence after reload." }],
-        });
-        assert.match(JSON.stringify(message), /Verified/);
-        const requests = received.slice(start);
-        assert.ok(
-          requests.some((body) =>
-            body.includes(`${stage} agent Project ${stage}`),
-          ),
-          "The next model request must receive the refreshed agent",
-        );
-        assert.ok(
-          requests.some((body) =>
-            body.includes(`${stage} skill Project ${stage}`),
-          ),
-          "The real skill tool must receive the refreshed body and includes",
-        );
-        const tools = requests.flatMap((body) =>
-          (
-            JSON.parse(body) as {
-              messages: { role: string; content: unknown }[];
-            }
-          ).messages.filter((message) => message.role === "tool"),
-        );
-        assert.ok(
-          tools.some((message) =>
-            JSON.stringify(message.content).includes("{{include:literal.md}}"),
-          ),
-          "Repeated reload must preserve the escaped marker without expanding it again",
-        );
-        terminalModelRequests += requests.length;
-        beforeTerminal = received.length;
-        assert.equal(await readFile(agentPath, "utf8"), expectedAgent);
-        assert.equal(
-          await readFile(join(project, ".opencode/commands/check.md"), "utf8"),
-          expectedCommand,
-        );
-        assert.equal(
-          await readFile(join(skillDirectory, "SKILL.md"), "utf8"),
-          expectedSkill,
-        );
-        assert.equal(
-          await readFile(
-            join(project, ".opencode/prompts/review/nested.txt"),
-            "utf8",
-          ),
-          expectedNested,
-        );
-        assert.equal(
-          await readFile(join(shared, "opencode.jsonc"), "utf8"),
-          expectedGlobal,
-        );
-        assert.equal(
-          await readFile(join(project, "opencode.jsonc"), "utf8"),
-          expectedProject,
-        );
-        assert.equal(await readFile(helperPath, "utf8"), helperText);
-        assert.equal(await readFile(obsoletePath, "utf8"), obsoleteText);
-      },
     });
     assert.equal(
       received.length,
       beforeTerminal,
       "TUI preview must not send a model prompt",
     );
-    assert.ok(
-      terminalModelRequests >= 4,
-      "Both reload paths must be followed by an actual agent and skill request",
-    );
-    // Restore a healthy loaded instance after characterizing a swallowed hook error.
-    await reload((current) =>
-      current.agent.review.prompt.includes("menu agent Project menu"),
-    );
-    assert.equal(await readFile(agentPath, "utf8"), expectedAgent);
+    assert.equal(await readFile(agentPath, "utf8"), agentText);
+    assert.equal(await readFile(helperPath, "utf8"), helperText);
+    assert.equal(await readFile(obsoletePath, "utf8"), obsoleteText);
   },
 );

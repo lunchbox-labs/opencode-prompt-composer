@@ -158,17 +158,13 @@ test("viewer registers prompt commands and preserves loaded text without executi
   const h = await harness(config);
   assert.deepEqual(
     h.commands.map(({ name, slashName }) => ({ name, slashName })),
-    [
-      { name: "prompt-composer.view-prompts", slashName: "view-prompts" },
-      { name: "prompt-composer.reload-prompts", slashName: "reload-prompts" },
-    ],
+    [{ name: "prompt-composer.view-prompts", slashName: "view-prompts" }],
   );
   h.open();
   const categories = await h.view("View prompts");
   assert.deepEqual(categories.options, [
     { title: "Agents", value: "agents" },
     { title: "Commands", value: "commands" },
-    { title: "Reload prompts", value: "reload" },
   ]);
   h.choose("agents");
   const menu = await h.view("Loaded agent prompts");
@@ -416,21 +412,24 @@ for (const change of [
   }
 }
 
-test("errors are displayed and reopening fetches the current loaded config", async () => {
+test("read errors offer only a read-only retry that fetches the loaded config", async () => {
   const h = await harness();
   h.read = () =>
     Promise.resolve({ data: {}, error: { message: "server error" } });
   h.open();
-  assert.match(
-    (await h.view("View prompts")).options![0].description!,
-    /Could not read loaded prompts/,
-  );
+  assert.deepEqual((await h.view("View prompts")).options, [
+    {
+      title: "Retry viewing prompts",
+      value: "retry",
+      description: "Could not read loaded prompts from OpenCode.",
+    },
+  ]);
   h.read = () =>
     Promise.resolve({
       data: { agent: { fresh: { prompt: "Fresh" } } },
       error: undefined,
     });
-  h.open();
+  h.choose("retry");
   await h.view("View prompts");
   h.choose("agents");
   assert.equal(

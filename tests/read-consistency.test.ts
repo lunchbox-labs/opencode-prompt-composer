@@ -11,9 +11,19 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
-import { discoverPrompts } from "../src/discovery.ts";
-import { compose } from "../src/runtime.ts";
+import { type PromptInventory, discoverPrompts } from "../src/discovery.ts";
+import { type PromptDependency, expandIncludes } from "../src/includes.ts";
 import { verifyInventory, verifyReads } from "../src/read-consistency.ts";
+
+async function readBody(
+  inventory: PromptInventory,
+): Promise<PromptDependency[]> {
+  const reads: PromptDependency[] = [];
+  await expandIncludes("{{include:body.md}}", inventory.files, (source) =>
+    reads.push(source),
+  );
+  return reads;
+}
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "prompt-consistency-"));
@@ -23,16 +33,13 @@ async function fixture(t: TestContext) {
   await writeFile(snippetPath, "Original");
   const context = { directory: root, worktree: root };
   const inventory = await discoverPrompts(context);
-  const composition = await compose(
-    { command: { check: { template: "{{include:body.md}}" } } },
-    inventory,
-  );
+  const reads = await readBody(inventory);
   return {
     root,
     snippetPath,
     inventory,
     context,
-    reads: composition.reads,
+    reads,
   };
 }
 
@@ -83,33 +90,24 @@ test(
     const original = join(f.root, ".opencode/prompts/original.md");
     await rename(f.snippetPath, original);
     await symlink(original, f.snippetPath);
-    const composition = await compose(
-      { command: { check: { template: "{{include:body.md}}" } } },
-      f.inventory,
-    );
+    const reads = await readBody(f.inventory);
     const replacement = join(f.root, ".opencode/prompts/replacement.md");
     await writeFile(replacement, f.reads[0].text);
     await chmod(replacement, f.reads[0].mode);
     await rm(f.snippetPath);
     await symlink(replacement, f.snippetPath);
-    await assert.rejects(
-      verifyReads(composition.reads),
-      /Prompt input changed:/,
-    );
+    await assert.rejects(verifyReads(reads), /Prompt input changed:/);
   },
 );
 
 test("final reads accept the source byte limit and reject growth beyond it", async (t) => {
   const f = await fixture(t);
   await writeFile(f.snippetPath, "x".repeat(64 * 1024));
-  const composition = await compose(
-    { command: { check: { template: "{{include:body.md}}" } } },
-    f.inventory,
-  );
-  await verifyReads(composition.reads);
+  const reads = await readBody(f.inventory);
+  await verifyReads(reads);
   await writeFile(f.snippetPath, "x".repeat(64 * 1024 + 1));
   await assert.rejects(
-    verifyReads(composition.reads),
+    verifyReads(reads),
     /Prompt sources must be regular files within the size limit\./,
   );
 });
