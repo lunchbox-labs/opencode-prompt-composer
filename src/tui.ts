@@ -1,8 +1,10 @@
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui";
+import { createFixedMenu } from "./fixed-menu.ts";
 import { dialogNavigation } from "./navigation.ts";
 import { previewPages } from "./preview.ts";
 
-const PromptComposerTui: TuiPlugin = (api) => {
+const PromptComposerTui: TuiPlugin = async (api) => {
+  const fixedMenu = await createFixedMenu(api);
   const navigation = dialogNavigation(api);
   const stopWatching = api.event.on("server.instance.disposed", (event) => {
     if (
@@ -26,33 +28,65 @@ const PromptComposerTui: TuiPlugin = (api) => {
     );
     const current = navigation.checkpoint();
     try {
-      const response = await client.config.get(
-        { directory },
-        { signal: api.lifecycle.signal },
-      );
+      const [response, agentResponse] = await Promise.all([
+        client.config.get({ directory }, { signal: api.lifecycle.signal }),
+        client.app.agents({ directory }, { signal: api.lifecycle.signal }),
+      ]);
       if (!current()) {
         return;
       }
-      if (response.error !== undefined) {
+      if (response.error !== undefined || agentResponse.error !== undefined) {
         throw new Error("Could not read loaded prompts from OpenCode.");
       }
-      const agents = Object.entries(response.data.agent ?? {}).map(
-        ([name, agent]) => {
-          const fallback =
-            agent?.prompt === undefined || agent.prompt.trim() === "";
-          const labels = [
-            agent?.disable === true ? "disabled" : "",
-            fallback ? "native fallback" : "",
-          ].filter(Boolean);
-          return {
-            title: `Agent: ${name}${labels.length > 0 ? ` (${labels.join(", ")})` : ""}`,
-            value: `agent:${name}`,
-            text: fallback
-              ? "(native fallback — no configured prompt text)"
-              : (agent.prompt ?? ""),
-          };
-        },
+      const configured = response.data.agent ?? {};
+      const loaded = agentResponse.data;
+      const represented = new Set(
+        Object.entries(configured).flatMap(([name, agent]) => [
+          name,
+          agent?.name ?? name,
+        ]),
       );
+      const agentEntries = [
+        ...Object.entries(configured).map(([name, agent]) => {
+          const matches = loaded.filter(
+            (item) => item.name === (agent?.name ?? name),
+          );
+          return {
+            name,
+            prompt:
+              agent?.prompt ??
+              (agent?.disable !== true && matches.length === 1
+                ? matches[0].prompt
+                : undefined),
+            disabled: agent?.disable === true,
+            builtin: false,
+          };
+        }),
+        ...loaded
+          .filter((agent) => !represented.has(agent.name))
+          .map((agent) => ({
+            name: agent.name,
+            prompt: agent.prompt,
+            disabled: false,
+            builtin: agent.native === true,
+          })),
+      ].map(({ name, prompt, disabled, builtin }) => {
+        const fallback = prompt === undefined || prompt === "";
+        const labels = [
+          disabled ? "disabled" : "",
+          builtin ? "built-in" : "",
+          fallback ? "native fallback" : "",
+        ].filter(Boolean);
+        return {
+          title: `Agent: ${name}${labels.length > 0 ? ` (${labels.join(", ")})` : ""}`,
+          value: `agent:${name}`,
+          text: fallback
+            ? "(native fallback — no agent prompt text available)"
+            : prompt,
+          builtin,
+        };
+      });
+      let showBuiltins = false;
       const menu = (
         title: string,
         options: { title: string; value: string }[],
@@ -66,6 +100,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
             onSelect: (selected) => select(selected.value),
           },
           root,
+          root ? fixedMenu : undefined,
         );
       const commands = Object.entries(response.data.command ?? {}).map(
         ([name, command]) => ({
@@ -74,6 +109,23 @@ const PromptComposerTui: TuiPlugin = (api) => {
           text: command.template,
         }),
       );
+      const preview = (entry: { title: string; text: string }) => {
+        const pages = previewPages(entry.text);
+        menu(
+          `${entry.title} — pages`,
+          pages.map((_, index) => ({
+            title: `Page ${index + 1} of ${pages.length}`,
+            value: String(index),
+          })),
+          (value) => {
+            const index = Number(value);
+            navigation.alert({
+              title: `${entry.title} — page ${index + 1}/${pages.length}`,
+              message: pages[index] === "" ? "(empty text)" : pages[index],
+            });
+          },
+        );
+      };
       const components = (
         title: string,
         entries: { title: string; value: string; text: string }[],
@@ -86,26 +138,43 @@ const PromptComposerTui: TuiPlugin = (api) => {
             : [{ title: empty, value: "empty" }],
           (value) => {
             const entry = entries.find((item) => item.value === value);
-            if (entry === undefined) {
-              return;
+            if (entry !== undefined) {
+              preview(entry);
             }
-            const pages = previewPages(entry.text);
-            menu(
-              `${entry.title} — pages`,
-              pages.map((_, index) => ({
-                title: `Page ${index + 1} of ${pages.length}`,
-                value: String(index),
-              })),
-              (value) => {
-                const index = Number(value);
-                navigation.alert({
-                  title: `${entry.title} — page ${index + 1}/${pages.length}`,
-                  message: pages[index] === "" ? "(empty text)" : pages[index],
-                });
-              },
-            );
           },
         );
+      const agents = () =>
+        navigation.menu({
+          title: "Loaded agent prompts",
+          get options() {
+            const visible = agentEntries.filter(
+              (entry) => showBuiltins || !entry.builtin,
+            );
+            return [
+              ...(visible.length > 0
+                ? visible.map(({ title, value }) => ({ title, value }))
+                : [{ title: "No configured agent prompts", value: "empty" }]),
+              {
+                title: showBuiltins
+                  ? "Hide built-in agents"
+                  : "Show built-in agents",
+                value: "\u0000builtins",
+                category: "Visibility",
+              },
+            ];
+          },
+          onSelect: ({ value }) => {
+            if (value === "\u0000builtins") {
+              showBuiltins = !showBuiltins;
+              navigation.refresh();
+              return;
+            }
+            const entry = agentEntries.find((item) => item.value === value);
+            if (entry !== undefined && (showBuiltins || !entry.builtin)) {
+              preview(entry);
+            }
+          },
+        });
       menu(
         "View prompts",
         [
@@ -114,11 +183,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
         ],
         (value) => {
           if (value === "agents") {
-            components(
-              "Loaded agent prompts",
-              agents,
-              "No configured agent prompts",
-            );
+            agents();
           } else if (value === "commands") {
             components(
               "Loaded command templates",
@@ -149,6 +214,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
             },
           },
           true,
+          fixedMenu,
         );
       }
     }
@@ -167,7 +233,6 @@ const PromptComposerTui: TuiPlugin = (api) => {
     ],
   });
   api.lifecycle.onDispose(unregister);
-  return Promise.resolve();
 };
 
 export default {

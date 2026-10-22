@@ -203,6 +203,7 @@ export function nativeTerminal(options: {
   };
   return {
     pid: child.pid,
+    text,
     wait,
     waitFor,
     focused,
@@ -218,6 +219,7 @@ export async function exerciseNativeTerminal(options: {
   binary: string;
   url: string;
   sessionID: string;
+  builtin: string;
   project: string;
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;
@@ -236,18 +238,29 @@ export async function exerciseNativeTerminal(options: {
     ],
   });
   try {
-    await terminal.waitFor(
-      terminal.promptFocused,
-      "main conversation input focus",
-    );
-    terminal.write("/view-prompts");
-    await terminal.waitFor(
-      () => terminal.echoed("/view-prompts"),
-      "slash command input echo",
-    );
-    await terminal.wait("View prompts");
-    terminal.write("\r");
-    await terminal.wait("View prompts", "Agents", "Commands");
+    const rootMenu = async () => {
+      await terminal.wait("View prompts", "Agents", "Commands");
+      assert.doesNotMatch(
+        terminal.text(),
+        /Search(?: fields)?…?/,
+        "The fixed category menu must not render a search input",
+      );
+      assert.equal(terminal.focused(), false);
+    };
+    const open = async () => {
+      await terminal.waitFor(
+        terminal.promptFocused,
+        "main conversation input focus",
+      );
+      terminal.write("/view-prompts");
+      await terminal.waitFor(
+        () => terminal.echoed("/view-prompts"),
+        "slash command input echo",
+      );
+      await terminal.wait("View prompts");
+      terminal.write("\r");
+      await rootMenu();
+    };
     const select = async (label: string, title: string) => {
       await terminal.waitFor(
         terminal.focused,
@@ -261,17 +274,32 @@ export async function exerciseNativeTerminal(options: {
       terminal.write("\r");
       await terminal.wait(title);
     };
-    await select("Agents", "Loaded agent prompts");
-    await select("Agent: review", "Agent: review — pages");
-    await select("Page 1 of 1", "Agent: review — page 1/1");
-    await terminal.wait("Review Project updated", "State uncertainty.");
-    terminal.write("\x1b");
-    await terminal.wait("Agent: review — pages");
-    terminal.write("\x1b");
-    await terminal.wait("Loaded agent prompts");
-    terminal.write("\x1b");
-    await terminal.wait("View prompts", "Agents", "Commands");
-    await select("Commands", "Loaded command templates");
+    const hiddenBuiltins = async () => {
+      await terminal.wait(
+        "Loaded agent prompts",
+        "Show built-in agents",
+        "Agent: review",
+        "Agent: helper",
+        "Agent: build",
+      );
+      await terminal.waitFor(terminal.focused, "focused agent search");
+      assert.doesNotMatch(terminal.text(), /Agent: [^\n]*\(built-in/);
+      assert.ok(
+        !terminal.text().includes(`Agent: ${options.builtin}`),
+        "Unconfigured native agent must be hidden by default",
+      );
+      assert.doesNotMatch(terminal.text(), /Agent: build \(/);
+    };
+    const showBuiltins = async () => {
+      await select("Show built-in agents", "Loaded agent prompts");
+      await terminal.wait(
+        "Hide built-in agents",
+        `Agent: ${options.builtin} (built-in)`,
+      );
+    };
+    await open();
+    terminal.write("\x1b[B\r");
+    await terminal.wait("Loaded command templates");
     await select("Command: check", "Command: check — pages");
     await select("Page 1 of 1", "Command: check — page 1/1");
     await terminal.wait(
@@ -282,9 +310,38 @@ export async function exerciseNativeTerminal(options: {
     terminal.write("\x1b");
     await terminal.wait("Loaded command templates");
     terminal.write("\x1b");
-    await terminal.wait("View prompts");
+    await rootMenu();
+    terminal.write("\x1b[A\r");
+    await hiddenBuiltins();
+    await showBuiltins();
+    await select("Hide built-in agents", "Loaded agent prompts");
+    await hiddenBuiltins();
+    await select("Agent: build", "Agent: build — pages");
+    await select("Page 1 of 1", "Agent: build — page 1/1");
+    await terminal.wait("Build override Project updated");
+    terminal.write("\x1b");
+    await terminal.wait("Agent: build — pages");
+    terminal.write("\x1b");
+    await hiddenBuiltins();
+    await select("Agent: review", "Agent: review — pages");
+    await select("Page 1 of 1", "Agent: review — page 1/1");
+    await terminal.wait("Review Project updated", "State uncertainty.");
+    terminal.write("\x1b");
+    await terminal.wait("Agent: review — pages");
+    terminal.write("\x1b");
+    await hiddenBuiltins();
+    await showBuiltins();
+    terminal.write("\x1b");
+    await rootMenu();
     terminal.write("\x1b");
     await terminal.waitFor(terminal.promptFocused, "main input after preview");
+    await open();
+    terminal.write("\r");
+    await hiddenBuiltins();
+    terminal.write("\x1b");
+    await rootMenu();
+    terminal.write("\x1b");
+    await terminal.waitFor(terminal.promptFocused, "main input after reopen");
   } finally {
     await terminal.stop();
   }

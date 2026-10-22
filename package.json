@@ -1,6 +1,6 @@
 {
   "name": "@lunchbox-labs/opencode-prompt-composer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Compose reusable prompt text in native OpenCode agents, commands and on-demand skills",
   "license": "MIT",
   "type": "module",
