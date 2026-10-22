@@ -41,6 +41,11 @@ export async function exercisePromptViewer(
   };
   const api = {
     state: { path },
+    event: {
+      on() {
+        return () => {};
+      },
+    },
     lifecycle: { signal: new AbortController().signal, onDispose() {} },
     route: { current: { name: "home" } },
     keymap: {
@@ -49,7 +54,7 @@ export async function exercisePromptViewer(
       }) {
         assert.deepEqual(
           layer.commands.map((command) => command.slashName),
-          ["view-prompts"],
+          ["view-prompts", "reload-prompts"],
         );
         open = layer.commands[0].run;
         return () => {};
@@ -114,6 +119,7 @@ export async function exercisePromptViewer(
   assert.deepEqual(categories.options, [
     { title: "Agents", value: "agents" },
     { title: "Commands", value: "commands" },
+    { title: "Reload prompts", value: "reload" },
   ]);
   for (const [category, menuTitle, prefix, entries] of [
     [

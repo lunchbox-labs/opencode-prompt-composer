@@ -7,15 +7,19 @@ import tui from "../src/tui.ts";
 
 interface View {
   title: string;
-  options?: { title: string; value: string }[];
+  options?: { title: string; value: string; description?: string }[];
   onSelect?: (item: { title: string; value: string }) => void;
   message?: string;
+  description?: string;
 }
 
 async function harness(config: Config = {}) {
   let current: View | undefined;
   let closed: (() => void) | undefined;
   let open = () => {};
+  const listeners = new Set<
+    (event: { properties: { directory: string } }) => void
+  >();
   const commands: { name: string; slashName: string }[] = [];
   const reads: { directory: string; signal?: AbortSignal }[] = [];
   let read: () => Promise<{ data: Config; error?: unknown }> = () =>
@@ -30,6 +34,17 @@ async function harness(config: Config = {}) {
       path: {
         directory: "/remote/project/nested",
         worktree: "/remote/project",
+      },
+    },
+    event: {
+      on(
+        _type: string,
+        listener: (event: { properties: { directory: string } }) => void,
+      ) {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
       },
     },
     lifecycle: { signal: controller.signal, onDispose() {} },
@@ -111,6 +126,11 @@ async function harness(config: Config = {}) {
     reads,
     view,
     choose,
+    disposed(directory = api.state.path.directory) {
+      for (const listener of listeners) {
+        listener({ properties: { directory } });
+      }
+    },
     open: () => open(),
     get current() {
       return current;
@@ -125,7 +145,7 @@ async function harness(config: Config = {}) {
   };
 }
 
-test("viewer registers only view-prompts and preserves loaded text without executing syntax", async () => {
+test("viewer registers prompt commands and preserves loaded text without executing syntax", async () => {
   const text =
     "Loaded {{include:unavailable.md}} $ARGUMENTS $1 !`touch never`\\\n";
   const config = {
@@ -138,13 +158,17 @@ test("viewer registers only view-prompts and preserves loaded text without execu
   const h = await harness(config);
   assert.deepEqual(
     h.commands.map(({ name, slashName }) => ({ name, slashName })),
-    [{ name: "prompt-composer.view-prompts", slashName: "view-prompts" }],
+    [
+      { name: "prompt-composer.view-prompts", slashName: "view-prompts" },
+      { name: "prompt-composer.reload-prompts", slashName: "reload-prompts" },
+    ],
   );
   h.open();
   const categories = await h.view("View prompts");
   assert.deepEqual(categories.options, [
     { title: "Agents", value: "agents" },
     { title: "Commands", value: "commands" },
+    { title: "Reload prompts", value: "reload" },
   ]);
   h.choose("agents");
   const menu = await h.view("Loaded agent prompts");
@@ -398,7 +422,7 @@ test("errors are displayed and reopening fetches the current loaded config", asy
     Promise.resolve({ data: {}, error: { message: "server error" } });
   h.open();
   assert.match(
-    (await h.view("Prompt Composer")).message!,
+    (await h.view("View prompts")).options![0].description!,
     /Could not read loaded prompts/,
   );
   h.read = () =>
@@ -488,4 +512,68 @@ test("retired category callbacks cannot switch categories and Back restores sele
   await h.view("View prompts");
   h.choose("agents");
   await h.view("Loaded agent prompts");
+});
+
+for (const stage of ["loading", "root", "agents", "pages", "page"] as const) {
+  test(`external instance disposal invalidates ${stage} and its retained callbacks`, async () => {
+    const h = await harness({
+      agent: { review: { prompt: "Before external reload" } },
+    });
+    let finish = () => {};
+    if (stage === "loading") {
+      h.read = () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ data: {} });
+        });
+    }
+    h.open();
+    await h.view(stage === "loading" ? "Loading prompts" : "View prompts");
+    if (stage === "agents" || stage === "pages" || stage === "page") {
+      h.choose("agents");
+      await h.view("Loaded agent prompts");
+    }
+    if (stage === "pages" || stage === "page") {
+      h.choose("agent:review");
+      await h.view("Agent: review — pages");
+    }
+    if (stage === "page") {
+      h.choose("0");
+      await h.view("Agent: review — page 1/1");
+    }
+    const retired = h.current!;
+    h.disposed("/unrelated");
+    assert.equal(h.current, retired);
+    h.disposed();
+    await setImmediate();
+    assert.equal(h.current, undefined);
+    retired.onSelect?.(retired.options![0]);
+    finish();
+    await setImmediate();
+    assert.equal(h.current, undefined);
+    h.read = () =>
+      Promise.resolve({
+        data: { agent: { review: { prompt: "After external reload" } } },
+      });
+    h.open();
+    await h.view("View prompts");
+    h.choose("agents");
+    h.choose("agent:review");
+    h.choose("0");
+    assert.equal(
+      (await h.view("Agent: review — page 1/1")).message,
+      "After external reload",
+    );
+  });
+}
+
+test("external disposal leaves unrelated dialogs alone", async () => {
+  const h = await harness();
+  h.open();
+  await h.view("View prompts");
+  h.api.ui.dialog.replace(() =>
+    h.api.ui.DialogAlert({ title: "Unrelated", message: "Keep this open" }),
+  );
+  h.disposed();
+  await setImmediate();
+  assert.equal((await h.view("Unrelated")).message, "Keep this open");
 });

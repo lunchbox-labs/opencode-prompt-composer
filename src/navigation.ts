@@ -18,9 +18,11 @@ export function dialogNavigation(
   let frames: Render[] = [];
   let revision = 0;
   let replacing = false;
+  let visible = false;
 
   const reset = () => {
     frames = [];
+    visible = false;
     revision++;
   };
   api.lifecycle.signal.addEventListener("abort", reset, { once: true });
@@ -63,6 +65,7 @@ export function dialogNavigation(
         if (replacing || active !== revision) {
           return;
         }
+        visible = false;
         frames.pop();
         const parent = frames.at(-1);
         const closed = ++revision;
@@ -90,6 +93,7 @@ export function dialogNavigation(
           }
         });
       });
+      visible = true;
     } finally {
       replacing = false;
     }
@@ -213,6 +217,9 @@ export function dialogNavigation(
     checkpoint,
     get canGoBack() {
       return frames.length > 1;
+    },
+    get active() {
+      return visible && frames.length > 0 && !api.lifecycle.signal.aborted;
     },
   };
 }

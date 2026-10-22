@@ -108,6 +108,7 @@ let reads = 0;
 const commands = [];
 const render = (view) => { current = view; };
 await tui.tui({
+  event: { on() { return () => {}; } },
   state: { path: { directory: '/remote/project', worktree: '/remote/project' } },
   route: { current: { name: 'home' } },
   lifecycle: { signal: new AbortController().signal, onDispose() {} },
@@ -115,7 +116,7 @@ await tui.tui({
   client: { config: { async get(input) { assert.equal(input.directory, '/remote/project'); reads++; return { data: config }; } } },
   ui: { DialogSelect: render, DialogAlert: render, dialog: { replace(next) { next(); }, get open() { return current !== undefined; } } },
 }, undefined, {});
-assert.deepEqual(commands.map(({ name, slashName }) => ({ name, slashName })), [{ name: 'prompt-composer.view-prompts', slashName: 'view-prompts' }]);
+assert.deepEqual(commands.map(({ name, slashName }) => ({ name, slashName })), [{ name: 'prompt-composer.view-prompts', slashName: 'view-prompts' }, { name: 'prompt-composer.reload-prompts', slashName: 'reload-prompts' }]);
 const choose = (value) => { const item = current.options.find((item) => item.value === value); assert.ok(item); current.onSelect(item); };
 for (const [category, value, expected] of [
   ['agents', 'agent:review', config.agent.review.prompt],
@@ -123,7 +124,7 @@ for (const [category, value, expected] of [
 ]) {
   await open();
   assert.equal(current.title, 'View prompts');
-  assert.deepEqual(current.options.map((item) => item.value), ['agents', 'commands']);
+  assert.deepEqual(current.options.map((item) => item.value), ['agents', 'commands', 'reload']);
   choose(category);
   choose(value);
   choose('0');
