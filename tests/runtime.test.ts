@@ -15,6 +15,32 @@ async function fixture(t: TestContext) {
   return { root, context: { directory: root, worktree: root } };
 }
 
+function skillOutput(
+  body: string,
+  name = "evidence",
+  dir = "/skills/evidence",
+) {
+  return {
+    title: `Loaded skill: ${name}`,
+    metadata: { name, dir },
+    output: [
+      `<skill_content name="${name}">`,
+      `# Skill: ${name}`,
+      "",
+      body,
+      "",
+      `Base directory for this skill: ${dir}`,
+      "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
+      "Note: file list is sampled.",
+      "",
+      "<skill_files>",
+      `<file>${dir}/{{include:file.md}}</file>`,
+      "</skill_files>",
+      "</skill_content>",
+    ].join("\n"),
+  };
+}
+
 test("native bodies expand explicit includes without settings or metadata changes", async (t) => {
   const { root, context } = await fixture(t);
   await writeFile(join(root, ".opencode/prompts/body.md"), "  Evidence\n");
@@ -178,26 +204,38 @@ test("config hook reloads native commands and agents without duplicate expansion
 
 test("skills expand on demand and reject truncated bodies without touching unrelated tools", async (t) => {
   const { root } = await fixture(t);
-  await writeFile(join(root, ".opencode/prompts/body.md"), "Skill evidence");
+  await writeFile(
+    join(root, ".opencode/prompts/body.md"),
+    "Skill {{include:nested.txt}}",
+  );
+  await writeFile(join(root, ".opencode/prompts/nested.txt"), "evidence");
   const hooks = await server.server({
     directory: root,
     worktree: root,
   } as PluginInput);
-  const output = {
-    title: "skill",
-    output: "{{include:body.md}}",
-    metadata: {},
-  };
+  const body = "Before\n{{include:body.md}}\n\\{{include:literal.md}}\nAfter";
+  const output = skillOutput(
+    body,
+    "{{include:name.md}}",
+    "/skills/{{include:directory.md}}",
+  );
+  const before = structuredClone(output);
   await hooks["tool.execute.after"]!(
     { tool: "read", sessionID: "s", callID: "c", args: {} },
     output,
   );
-  assert.equal(output.output, "{{include:body.md}}");
+  assert.deepEqual(output, before);
   await hooks["tool.execute.after"]!(
     { tool: "skill", sessionID: "s", callID: "c", args: {} },
     output,
   );
-  assert.equal(output.output, "Skill evidence");
+  assert.deepEqual(output, {
+    ...before,
+    output: before.output.replace(
+      body,
+      "Before\nSkill evidence\n{{include:literal.md}}\nAfter",
+    ),
+  });
   await assert.rejects(
     hooks["tool.execute.after"]!(
       { tool: "skill", sessionID: "s", callID: "c", args: {} },
@@ -205,6 +243,22 @@ test("skills expand on demand and reject truncated bodies without touching unrel
     ),
     /truncated/,
   );
+});
+
+test("wrapper-only markers stay literal and unknown skill output fails without mutation", async (t) => {
+  const { context } = await fixture(t);
+  const hooks = await server.server(context as PluginInput);
+  const input = { tool: "skill", sessionID: "s", callID: "c", args: {} };
+  const wrapperOnly = skillOutput("Ordinary body", "customize-opencode", ".");
+  const before = structuredClone(wrapperOnly);
+  await hooks["tool.execute.after"]!(input, wrapperOnly);
+  assert.deepEqual(wrapperOnly, before);
+  const unknown = {
+    ...skillOutput("Unused"),
+    output: "PRIVATE {{include:missing.md}}",
+  };
+  await assert.rejects(hooks["tool.execute.after"]!(input, unknown), /framing/);
+  assert.equal(unknown.output, "PRIVATE {{include:missing.md}}");
 });
 
 test("include failures identify consumers and logical cycles without native paths or prompt bodies", async (t) => {
@@ -247,11 +301,7 @@ test("skill failures have honest consumer context", async (t) => {
   await assert.rejects(
     hooks["tool.execute.after"]!(
       { tool: "skill", sessionID: "s", callID: "c", args: { name: "review" } },
-      {
-        title: "skill",
-        output: "PRIVATE {{include:missing.md}}",
-        metadata: {},
-      },
+      skillOutput("PRIVATE {{include:missing.md}}"),
     ),
     (error: Error) => {
       assert.match(error.message, /skill output.*source file unavailable/);
