@@ -18,7 +18,7 @@ interface View {
 }
 
 /** Installed viewer and native HTTP client; only terminal rendering is replaced. */
-export async function exerciseAgentPromptViewer(
+export async function exercisePromptViewer(
   plugin: string,
   request: Request,
   authoredPath: string,
@@ -49,7 +49,7 @@ export async function exerciseAgentPromptViewer(
       }) {
         assert.deepEqual(
           layer.commands.map((command) => command.slashName),
-          ["agent-prompts"],
+          ["view-prompts"],
         );
         open = layer.commands[0].run;
         return () => {};
@@ -110,38 +110,59 @@ export async function exerciseAgentPromptViewer(
     current?.onSelect?.(item);
   }
   open();
-  const menu = await view("Loaded agent prompts");
-  assert.ok(menu.options!.every((item) => item.value.startsWith("agent:")));
-  if (config.agent.helper.disable === true) {
-    assert.equal(
-      menu.options!.find((item) => item.value === "agent:helper")?.title,
-      "Agent: helper (disabled)",
-    );
-  }
-  for (const [value, title, expected] of [
-    ["agent:review", "Agent: review", config.agent.review.prompt],
+  const categories = await view("View prompts");
+  assert.deepEqual(categories.options, [
+    { title: "Agents", value: "agents" },
+    { title: "Commands", value: "commands" },
+  ]);
+  for (const [category, menuTitle, prefix, entries] of [
     [
-      "agent:helper",
-      `Agent: helper${config.agent.helper.disable === true ? " (disabled)" : ""}`,
-      config.agent.helper.prompt,
+      "agents",
+      "Loaded agent prompts",
+      "agent:",
+      [
+        ["agent:review", "Agent: review", config.agent.review.prompt],
+        [
+          "agent:helper",
+          `Agent: helper${config.agent.helper.disable === true ? " (disabled)" : ""}`,
+          config.agent.helper.prompt,
+        ],
+      ],
     ],
-  ]) {
-    choose(value!);
-    const pages = (await view(`${title} — pages`)).options!.filter(
-      (item) => item.value !== "\u0000back",
+    [
+      "commands",
+      "Loaded command templates",
+      "command:",
+      [["command:check", "Command: check", config.command.check.template]],
+    ],
+  ] as const) {
+    choose(category);
+    const menu = await view(menuTitle);
+    assert.ok(
+      menu.options!.every(
+        (item) => item.value === "\u0000back" || item.value.startsWith(prefix),
+      ),
     );
-    const text: string[] = [];
-    for (const [index, page] of pages.entries()) {
-      choose(page.value);
-      text.push(
-        (await view(`${title} — page ${index + 1}/${pages.length}`)).message!,
+    for (const [value, title, expected] of entries) {
+      choose(value);
+      const pages = (await view(`${title} — pages`)).options!.filter(
+        (item) => item.value !== "\u0000back",
       );
-      api.ui.dialog.clear();
-      await view(`${title} — pages`);
+      const text: string[] = [];
+      for (const [index, page] of pages.entries()) {
+        choose(page.value);
+        text.push(
+          (await view(`${title} — page ${index + 1}/${pages.length}`)).message!,
+        );
+        api.ui.dialog.clear();
+        await view(`${title} — pages`);
+      }
+      assert.equal(text.join(""), expected);
+      choose("\u0000back");
+      await view(menuTitle);
     }
-    assert.equal(text.join(""), expected);
     choose("\u0000back");
-    await view("Loaded agent prompts");
+    await view("View prompts");
   }
   api.ui.dialog.clear();
   await Promise.resolve();

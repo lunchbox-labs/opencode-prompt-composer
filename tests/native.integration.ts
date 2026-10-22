@@ -16,8 +16,8 @@ import { setTimeout } from "node:timers/promises";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import {
-  exerciseAgentPromptViewer,
   exerciseConfigEditor,
+  exercisePromptViewer,
 } from "./native-editors.ts";
 import { resolveNativeVersion, verifyNativeVersion } from "./native-host.ts";
 import { exerciseNativeTerminal } from "./native-terminal.ts";
@@ -518,7 +518,7 @@ test(
       );
       await exerciseConfigEditor(configPlugin, shared, api);
     }
-    await exerciseAgentPromptViewer(plugin, api, agentPath).catch(
+    await exercisePromptViewer(plugin, api, agentPath).catch(
       (error: unknown) => {
         throw new Error(`Native prompt viewer failed.\n${logs}`, {
           cause: error,
@@ -643,13 +643,6 @@ test(
         "Help {{include:review/body.md}}\n\nState uncertainty.\n\nHelper rule.",
       );
       await exerciseConfigEditor(configPlugin, shared, api);
-      await exerciseAgentPromptViewer(plugin, api, agentPath).catch(
-        (error: unknown) => {
-          throw new Error(`Native prompt viewer failed.\n${logs}`, {
-            cause: error,
-          });
-        },
-      );
     } else {
       assert.equal(config.agent.helper.disable, true);
       assert.equal(
@@ -680,6 +673,13 @@ test(
         "Help {{include:review/body.md}}\n\nState uncertainty.\n\nHelper rule.",
       );
     }
+    await exercisePromptViewer(plugin, api, agentPath).catch(
+      (error: unknown) => {
+        throw new Error(`Native prompt viewer failed.\n${logs}`, {
+          cause: error,
+        });
+      },
+    );
     // Check authored files before fixture writes can hide a plugin mutation.
     assert.equal(await readFile(agentPath, "utf8"), agentText);
     assert.equal(await readFile(helperPath, "utf8"), helperText);

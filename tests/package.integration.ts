@@ -96,9 +96,41 @@ for (const name of ['editor', 'settings', 'schema.json']) {
   await assert.rejects(import('@lunchbox-labs/opencode-prompt-composer/' + name), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 }
 const hooks = await plugin.server({ directory: process.argv[2], worktree: process.argv[2] });
-const config = { agent: { review: { prompt: '{{include:rules.md}}' } } };
+const config = { agent: { review: { prompt: '{{include:rules.md}}' } }, command: { check: { template: '{{include:rules.md}} $ARGUMENTS $1 !touch', subtask: true } } };
 await hooks.config(config);
 assert.equal(config.agent.review.prompt, 'Packed rules');
+assert.equal(config.command.check.template, 'Packed rules $ARGUMENTS $1 !touch');
+assert.equal(config.command.check.subtask, true);
+const before = structuredClone(config);
+let current;
+let open;
+let reads = 0;
+const commands = [];
+const render = (view) => { current = view; };
+await tui.tui({
+  state: { path: { directory: '/remote/project', worktree: '/remote/project' } },
+  route: { current: { name: 'home' } },
+  lifecycle: { signal: new AbortController().signal, onDispose() {} },
+  keymap: { registerLayer(layer) { commands.push(...layer.commands); open = layer.commands[0].run; return () => {}; } },
+  client: { config: { async get(input) { assert.equal(input.directory, '/remote/project'); reads++; return { data: config }; } } },
+  ui: { DialogSelect: render, DialogAlert: render, dialog: { replace(next) { next(); }, get open() { return current !== undefined; } } },
+}, undefined, {});
+assert.deepEqual(commands.map(({ name, slashName }) => ({ name, slashName })), [{ name: 'prompt-composer.view-prompts', slashName: 'view-prompts' }]);
+const choose = (value) => { const item = current.options.find((item) => item.value === value); assert.ok(item); current.onSelect(item); };
+for (const [category, value, expected] of [
+  ['agents', 'agent:review', config.agent.review.prompt],
+  ['commands', 'command:check', config.command.check.template],
+]) {
+  await open();
+  assert.equal(current.title, 'View prompts');
+  assert.deepEqual(current.options.map((item) => item.value), ['agents', 'commands']);
+  choose(category);
+  choose(value);
+  choose('0');
+  assert.equal(current.message, expected);
+}
+assert.equal(reads, 2);
+assert.deepEqual(config, before);
 `,
     );
     await execute(process.execPath, [join(root, "consumer.mjs"), project], {
