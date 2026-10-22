@@ -29,6 +29,7 @@ export function dialogNavigation(
   const checkpoint = () => {
     const active = revision;
     const client = api.client;
+    const { directory, worktree } = api.state.path;
     const route = api.route.current;
     const name = route.name;
     const sessionID = name === "session" ? route.params?.sessionID : undefined;
@@ -38,6 +39,8 @@ export function dialogNavigation(
         !api.lifecycle.signal.aborted &&
         active === revision &&
         client === api.client &&
+        directory === api.state.path.directory &&
+        worktree === api.state.path.worktree &&
         current.name === name &&
         (current.name !== "session" || current.params?.sessionID === sessionID)
       );
@@ -49,6 +52,7 @@ export function dialogNavigation(
       return;
     }
     const client = api.client;
+    const { directory, worktree } = api.state.path;
     const route = api.route.current;
     const name = route.name;
     const sessionID = name === "session" ? route.params?.sessionID : undefined;
@@ -71,6 +75,8 @@ export function dialogNavigation(
           if (
             api.lifecycle.signal.aborted ||
             client !== api.client ||
+            directory !== api.state.path.directory ||
+            worktree !== api.state.path.worktree ||
             api.ui.dialog.open ||
             current.name !== name ||
             (current.name === "session" &&

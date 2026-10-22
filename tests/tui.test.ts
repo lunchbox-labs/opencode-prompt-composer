@@ -1,146 +1,74 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { setTimeout } from "node:timers/promises";
+import { setImmediate } from "node:timers/promises";
 import { test } from "node:test";
-import type { Config, PluginInput } from "@opencode-ai/plugin";
+import type { Config } from "@opencode-ai/plugin";
 import type { TuiPluginApi, TuiPluginMeta } from "@opencode-ai/plugin/tui";
-import server from "../src/server.ts";
 import tui from "../src/tui.ts";
-import { packageName } from "../src/registration.ts";
 
 interface View {
   title: string;
-  options?: { title: string; value: string; description?: string }[];
+  options?: { title: string; value: string }[];
   onSelect?: (item: { title: string; value: string }) => void;
-  onConfirm?: (text?: string) => void;
   message?: string;
 }
 
-test("TUI previews, saves JSONC, and applies rules through a matching server baseline", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "prompt-tui-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const environment = {
-    XDG_CONFIG_HOME: join(root, "config"),
-    OPENCODE_TEST_HOME: join(root, "home"),
-    OPENCODE_CONFIG_DIR: join(root, "custom"),
-  };
-  const previous = Object.fromEntries(
-    Object.keys(environment).map((key) => [key, process.env[key]]),
-  );
-  Object.assign(process.env, environment);
-  t.after(() => {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) {
-        Reflect.deleteProperty(process.env, key);
-      } else {
-        process.env[key] = value;
-      }
-    }
-  });
-  const directory = join(root, "nested");
-  await mkdir(directory);
-  await mkdir(join(root, ".opencode"));
-  const path = join(root, ".opencode/prompt-composer.jsonc");
-  await writeFile(path, '// Keep comment\n{"agents":{}}');
-  const authored: Config = {
-    plugin: [packageName],
-    agent: { review: { prompt: "Review" } },
-  };
-  const hooks = await server.server({
-    directory,
-    worktree: root,
-  } as PluginInput);
-  let config = structuredClone(authored);
-  await hooks.config!(config);
-  let pendingReload = false;
-  let disposalCount = 0;
-  let changeDuring: "baseline" | "refresh" | undefined;
-  let reloadReads = 0;
-  let holdRead: Promise<void> | undefined;
-  const commands = new Map<string, () => void>();
-  const slashNames: string[] = [];
+async function harness(config: Config = {}) {
   let current: View | undefined;
   let closed: (() => void) | undefined;
-  const alerts: string[] = [];
+  let open = () => {};
+  const commands: { name: string; slashName: string }[] = [];
+  const reads: { directory: string; signal?: AbortSignal }[] = [];
+  let read: () => Promise<{ data: Config; error?: unknown }> = () =>
+    Promise.resolve({ data: config });
+  const controller = new AbortController();
   const render = (view: View) => {
     current = view;
-    if (view.title === "Prompt Composer") {
-      alerts.push(view.message ?? "");
-    }
   };
   const api = {
-    state: { path: { directory, worktree: root } },
-    lifecycle: { signal: new AbortController().signal, onDispose() {} },
+    // This server path need not exist on the TUI machine.
+    state: {
+      path: {
+        directory: "/remote/project/nested",
+        worktree: "/remote/project",
+      },
+    },
+    lifecycle: { signal: controller.signal, onDispose() {} },
     route: { current: { name: "home" } },
     keymap: {
       registerLayer(layer: {
         commands: { name: string; slashName: string; run: () => void }[];
       }) {
-        for (const command of layer.commands) {
-          commands.set(command.name, command.run);
-          slashNames.push(command.slashName);
-        }
+        commands.push(...layer.commands);
+        open = layer.commands[0].run;
         return () => {};
       },
     },
-    client: {
-      file: {
-        async read(input: { path: string; directory: string }) {
-          return {
-            data: {
-              type: "text",
-              content: await readFile(
-                join(input.directory, input.path),
-                "utf8",
-              ),
-            },
-          };
+    client: new Proxy(
+      {
+        config: {
+          async get(
+            input: { directory: string },
+            options?: { signal?: AbortSignal },
+          ) {
+            reads.push({ ...input, signal: options?.signal });
+            return read();
+          },
         },
       },
-      config: {
-        async get() {
-          await holdRead;
-          if (changeDuring === "baseline") {
-            Object.assign(api.state.path, { directory: root });
-          }
-          if (pendingReload) {
-            reloadReads++;
-            if (reloadReads === 1) {
-              return { data: structuredClone(config) };
-            }
-            if (reloadReads === 2) {
-              return { data: structuredClone(authored) };
-            }
-            config = structuredClone(authored);
-            await hooks.config!(config);
-            pendingReload = false;
-            if (changeDuring === "refresh") {
-              Object.assign(api.state.path, { directory: root });
-            }
-          }
-          return { data: structuredClone(config) };
+      {
+        get(target, property) {
+          assert.equal(
+            property,
+            "config",
+            `Unexpected client API: ${String(property)}`,
+          );
+          return target.config;
         },
       },
-      session: {
-        async status() {
-          return { data: {} };
-        },
-      },
-      instance: {
-        async dispose() {
-          disposalCount++;
-          pendingReload = true;
-          return { data: true };
-        },
-      },
-    },
+    ),
     ui: {
       DialogSelect: render,
       DialogAlert: render,
-      DialogConfirm: render,
-      DialogPrompt: render,
       dialog: {
         replace(next: () => void, onClose?: () => void) {
           closed?.();
@@ -159,341 +87,285 @@ test("TUI previews, saves JSONC, and applies rules through a matching server bas
     },
   } as unknown as TuiPluginApi;
   await tui.tui(api, undefined, {} as TuiPluginMeta);
-  assert.deepEqual(slashNames, ["compose-prompts"]);
   async function view(title: string) {
-    for (let n = 0; n < 200 && current?.title !== title; n++) {
-      await setTimeout(5);
+    // Allow deferred native command dispatch before checking a restored title.
+    await setImmediate();
+    for (let n = 0; n < 20 && current?.title !== title; n++) {
+      await setImmediate();
     }
     assert.equal(current?.title, title, current?.message);
     return current;
   }
   function choose(value: string) {
-    const item = current?.options?.find((item) => item.value === value);
-    assert.ok(item !== undefined);
-    current?.onSelect?.(item);
-  }
-  commands.get("prompt-composer.compose")!();
-  await view("Compose prompts");
-  choose("files");
-  assert.match((await view("Prompt files")).message ?? "", /No prompt files/);
-  api.ui.dialog.clear();
-  await view("Compose prompts");
-  const promptPath = join(root, ".opencode/prompts/review/findings.md");
-  await mkdir(join(root, ".opencode/prompts/review"), { recursive: true });
-  await writeFile(promptPath, "Findings");
-  const homePath = join(
-    environment.OPENCODE_TEST_HOME,
-    ".opencode/prompts/review/findings.md",
-  );
-  const customPath = join(
-    environment.OPENCODE_CONFIG_DIR,
-    "prompts/review/findings.md",
-  );
-  for (const path of [homePath, customPath]) {
-    await mkdir(join(path, ".."), { recursive: true });
-    await writeFile(path, "Override");
-  }
-  choose("files");
-  choose("files");
-  const fileList = await view("Prompt files");
-  assert.equal(
-    fileList.options?.some((item) => item.title === "review/findings.md"),
-    true,
-  );
-  for (const change of ["project", "connection"]) {
-    const client = api.client;
-    if (change === "project") {
-      Object.assign(api.state.path, { directory: root });
-    } else {
-      Reflect.set(api, "client", new Proxy(client, {}));
-    }
-    const beforeChange = current;
-    choose("review/findings.md");
-    if (change === "connection") {
-      await setTimeout(20);
-      assert.equal(current, beforeChange);
-    } else {
-      assert.match(
-        (await view("Prompt Composer")).message ?? "",
-        /connection or project changed/,
-      );
-    }
-    Object.assign(api.state.path, { directory });
-    Reflect.set(api, "client", client);
-    api.ui.dialog.clear();
-    commands.get("prompt-composer.compose")!();
-    await view("Compose prompts");
-    choose("files");
-    await view("Prompt files");
-    alerts.length = 0;
-  }
-  choose("review/findings.md");
-  const detail = await view("Prompt file source");
-  assert.equal(
-    detail.message,
-    `Filename: review/findings.md\n\nInclude marker:\n{{include:review/findings.md}}\n\nWinning path:\n${customPath}\n\nShadowed paths (discovery order):\n${promptPath}\n${homePath}`,
-  );
-  api.ui.dialog.clear();
-  await view("Prompt files");
-  await rm(customPath);
-  choose("review/findings.md");
-  assert.match(
-    (await view("Prompt file source")).message ?? "",
-    /Winning path:/,
-  );
-  assert.equal(current?.message?.includes(`Winning path:\n${homePath}`), true);
-  assert.equal(
-    current.message.endsWith(`discovery order):\n${promptPath}`),
-    true,
-  );
-  api.ui.dialog.clear();
-  await view("Prompt files");
-  await rm(homePath);
-  await rm(promptPath);
-  choose("review/findings.md");
-  assert.match(
-    (await view("Prompt file source")).message ?? "",
-    /no longer discovered/i,
-  );
-  api.ui.dialog.clear();
-  await view("Prompt files");
-  choose("\u0000back");
-  await view("Compose prompts");
-  // Closing a pending scan must not resurrect the browser.
-  let releaseRead = () => {};
-  holdRead = new Promise<void>((resolve) => {
-    releaseRead = resolve;
-  });
-  choose("files");
-  await setTimeout(20);
-  api.ui.dialog.clear();
-  releaseRead();
-  await setTimeout(50);
-  assert.equal(current, undefined);
-  holdRead = undefined;
-  commands.get("prompt-composer.compose")!();
-  await view("Compose prompts");
-  // A connection/project change while loading must not show old inventory.
-  holdRead = new Promise<void>((resolve) => {
-    releaseRead = resolve;
-  });
-  choose("files");
-  await setTimeout(20);
-  Object.assign(api.state.path, { directory: root });
-  releaseRead();
-  await view("Prompt Composer");
-  Object.assign(api.state.path, { directory });
-  holdRead = undefined;
-  alerts.length = 0;
-  commands.get("prompt-composer.compose")!();
-  await view("Compose prompts");
-  choose("edit");
-  await view("Prompt settings source");
-  choose(path);
-  await view("Edit prompt settings");
-  choose("agents");
-  (await view("Agent fragments and default inheritance")).onConfirm?.(
-    '{"review":{"append":["After"]}}',
-  );
-  let preview = await view("Save prompt changes?");
-  assert.match(preview.message ?? "", /Review\n\nAfter/);
-  assert.doesNotMatch(await readFile(path, "utf8"), /After/);
-  api.ui.dialog.clear();
-  preview.onConfirm?.();
-  const input = await view("Agent fragments and default inheritance");
-  assert.doesNotMatch(await readFile(path, "utf8"), /After/);
-  input.onConfirm?.('{"review":{"append":["After"]}}');
-  preview = await view("Save prompt changes?");
-  changeDuring = "baseline";
-  preview.onConfirm?.();
-  api.ui.dialog.clear();
-  assert.match(
-    (await view("Prompt Composer")).message ?? "",
-    /connection or project changed/,
-  );
-  assert.doesNotMatch(await readFile(path, "utf8"), /After/);
-  changeDuring = undefined;
-  Object.assign(api.state.path, { directory });
-  alerts.length = 0;
-  commands.get("prompt-composer.compose")!();
-  await view("Compose prompts");
-  choose("edit");
-  await view("Prompt settings source");
-  choose(path);
-  await view("Edit prompt settings");
-  choose("agents");
-  (await view("Agent fragments and default inheritance")).onConfirm?.(
-    '{"review":{"append":["After"]}}',
-  );
-  preview = await view("Save prompt changes?");
-  preview.onConfirm?.();
-  preview.onConfirm?.();
-  api.ui.dialog.clear();
-  await view("Prompt settings saved");
-  assert.deepEqual(alerts, []);
-  assert.match(await readFile(path, "utf8"), /^\/\/ Keep comment/);
-  assert.match(await readFile(path, "utf8"), /After/);
-  assert.equal(config.agent!.review!.prompt, "Review");
-  current = undefined;
-  commands.get("prompt-composer.compose")!();
-  await view("Compose prompts");
-  choose("apply");
-  choose("apply");
-  await view("Prompt settings applied");
-  assert.equal(disposalCount, 1);
-  assert.equal(reloadReads, 3);
-  assert.equal(config.agent!.review!.prompt, "Review\n\nAfter");
-  // A connection change while reading the old baseline must not dispose it.
-  changeDuring = "baseline";
-  commands.get("prompt-composer.compose")!();
-  await view("Compose prompts");
-  choose("apply");
-  assert.match(
-    (await view("Prompt Composer")).message ?? "",
-    /instance changed/,
-  );
-  assert.equal(disposalCount, 1);
-  Object.assign(api.state.path, { directory });
-  current = undefined;
-
-  // A connection change while receiving the new baseline must not report success.
-  changeDuring = "refresh";
-  commands.get("prompt-composer.compose")!();
-  await view("Compose prompts");
-  choose("apply");
-  assert.match(
-    (await view("Prompt Composer")).message ?? "",
-    /instance changed/,
-  );
-  assert.equal(disposalCount, 2);
-  Object.assign(api.state.path, { directory });
-  changeDuring = undefined;
-  current = undefined;
-  await rm(path);
-  commands.get("prompt-composer.compose")!();
-  await view("Compose prompts");
-  choose("preview");
-  const stale = await view("Prompt Composer");
-  assert.match(stale.message ?? "", /Prompt files changed/);
-  assert.equal(config.agent!.review!.prompt, "Review\n\nAfter");
-  commands.get("prompt-composer.compose")!();
-  await view("Compose prompts");
-  choose("files");
-  assert.match(
-    (await view("Prompt Composer")).message ?? "",
-    /Prompt files changed/,
-  );
-  // Shared defaults must not hide the fixed project creation action.
-  const previousCustom = process.env.OPENCODE_CONFIG_DIR;
-  t.after(() => {
-    if (previousCustom === undefined) {
-      delete process.env.OPENCODE_CONFIG_DIR;
-    } else {
-      process.env.OPENCODE_CONFIG_DIR = previousCustom;
-    }
-  });
-  const shared = join(root, "shared");
-  await mkdir(shared);
-  const sharedPath = join(shared, "prompt-composer.jsonc");
-  const sharedText = '{"defaults":{"append":["Shared default"]}}';
-  await writeFile(sharedPath, sharedText);
-  process.env.OPENCODE_CONFIG_DIR = shared;
-  const previousDisable = process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
-  t.after(() => {
-    if (previousDisable === undefined) {
-      delete process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
-    } else {
-      process.env.OPENCODE_DISABLE_PROJECT_CONFIG = previousDisable;
-    }
-  });
-  for (const value of ["1", "true"]) {
-    await t.test(
-      `project creation is unavailable when discovery is disabled by ${value}`,
-      async () => {
-        process.env.OPENCODE_DISABLE_PROJECT_CONFIG = value;
-        config = structuredClone(authored);
-        await hooks.config!(config);
-        current = undefined;
-        commands.get("prompt-composer.compose")!();
-        await view("Compose prompts");
-        choose("edit");
-        const menu = await view("Prompt settings source");
-        assert.equal(
-          menu.options?.some((option) => option.value === "create"),
-          false,
-        );
-        menu.onSelect?.({
-          title: "Create project prompt settings",
-          value: "create",
-        });
-        assert.match(
-          (await view("Prompt Composer")).message ?? "",
-          /discovery is disabled/,
-        );
-        await assert.rejects(readFile(path), { code: "ENOENT" });
-      },
+    const option = current?.options?.find((item) => item.value === value);
+    assert.ok(
+      option !== undefined,
+      `Missing ${value} in ${JSON.stringify(current)}`,
     );
+    current?.onSelect?.(option);
   }
-  delete process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
-  config = structuredClone(authored);
-  await hooks.config!(config);
-  current = undefined;
-  commands.get("prompt-composer.compose")!();
-  await view("Compose prompts");
-  choose("edit");
-  assert.equal(
-    (await view("Prompt settings source")).options?.some(
-      (option) => option.value === "create",
-    ),
-    true,
+  return {
+    api,
+    controller,
+    commands,
+    reads,
+    view,
+    choose,
+    open: () => open(),
+    get current() {
+      return current;
+    },
+    set read(fn: typeof read) {
+      read = fn;
+    },
+    async escape() {
+      api.ui.dialog.clear();
+      await setImmediate();
+    },
+  };
+}
+
+test("read-only viewer uses only connected config and preserves literal command text", async () => {
+  const text =
+    "Loaded {{include:unavailable.md}} $ARGUMENTS $1 !`touch never`\\\n";
+  const config = { command: { check: { template: text } } };
+  const before = structuredClone(config);
+  const h = await harness(config);
+  assert.deepEqual(
+    h.commands.map(({ name, slashName }) => ({ name, slashName })),
+    [{ name: "prompt-composer.compose", slashName: "compose-prompts" }],
   );
+  h.open();
+  const menu = await h.view("Loaded prompts");
+  assert.deepEqual(menu.options, [
+    { title: "Command: check", value: "command:check" },
+  ]);
+  assert.equal(h.reads.length, 1);
+  assert.equal(h.reads[0].directory, "/remote/project/nested");
+  assert.equal(h.reads[0].signal, h.controller.signal);
+  h.choose("command:check");
+  await h.view("Command: check — pages");
+  h.choose("0");
+  assert.equal((await h.view("Command: check — page 1/1")).message, text);
+  await h.escape();
+  await h.view("Command: check — pages");
+  h.choose("\u0000back");
+  await h.view("Loaded prompts");
+  await h.escape();
+  assert.equal(h.current, undefined);
+  assert.equal(h.reads.length, 1);
+  assert.deepEqual(config, before);
+});
+
+test("agent pages retain full Unicode text and label disabled and native fallback entries", async () => {
+  const text = `${"🙂 long instruction\r\n\n".repeat(200)}{{include:literal.md}}\n`;
+  const h = await harness({
+    agent: {
+      review: { prompt: text },
+      off: { disable: true, prompt: "Inactive" },
+      build: {},
+      blank: { prompt: " \n\t" },
+    },
+  });
+  h.open();
+  const menu = await h.view("Loaded prompts");
   assert.equal(
-    (await view("Prompt settings source")).options?.find(
-      (option) => option.value === "create",
-    )?.description,
-    path,
+    menu.options!.find((item) => item.value === "agent:off")?.title,
+    "Agent: off (disabled)",
   );
-  choose("create");
-  queueMicrotask(() => Object.assign(api.state.path, { directory: root }));
+  for (const name of ["build", "blank"]) {
+    const title = `Agent: ${name} (native fallback)`;
+    assert.equal(
+      menu.options!.find((item) => item.value === `agent:${name}`)?.title,
+      title,
+    );
+    h.choose(`agent:${name}`);
+    await h.view(`${title} — pages`);
+    h.choose("0");
+    assert.equal(
+      (await h.view(`${title} — page 1/1`)).message,
+      "(native fallback — no configured prompt text)",
+    );
+    await h.escape();
+    h.choose("\u0000back");
+  }
+  h.choose("agent:review");
+  const pages = (await h.view("Agent: review — pages")).options!.filter(
+    (item) => item.value !== "\u0000back",
+  );
+  const parts: string[] = [];
+  for (const [index, page] of pages.entries()) {
+    h.choose(page.value);
+    const body = (
+      await h.view(`Agent: review — page ${index + 1}/${pages.length}`)
+    ).message!;
+    assert.ok(Array.from(body).length <= 240);
+    assert.ok(body.split("\n").length <= 7);
+    assert.ok(body.isWellFormed());
+    parts.push(body);
+    await h.escape();
+  }
+  assert.equal(parts.join(""), text);
+});
+
+test("empty config and empty command bodies have readable placeholders", async () => {
+  const h = await harness();
+  h.open();
+  const menu = await h.view("Loaded prompts");
+  assert.deepEqual(menu.options, [
+    { title: "No configured agent or command text", value: "empty" },
+  ]);
+  h.choose("empty");
+  assert.equal(h.current, menu);
+  h.read = () =>
+    Promise.resolve({
+      data: { command: { empty: { template: "" } } },
+      error: undefined,
+    });
+  h.open();
+  await h.view("Loaded prompts");
+  h.choose("command:empty");
+  h.choose("0");
+  assert.equal(
+    (await h.view("Command: empty — page 1/1")).message,
+    "(empty text)",
+  );
+});
+
+for (const change of [
+  "close",
+  "client",
+  "directory",
+  "worktree",
+  "route",
+  "dispose",
+  "reopen",
+] as const) {
+  for (const fail of [false, true]) {
+    test(`late ${fail ? "failure" : "success"} is ignored after ${change}`, async () => {
+      const h = await harness();
+      let finish = () => {};
+      h.read = () =>
+        new Promise((resolve, reject) => {
+          finish = () =>
+            fail
+              ? reject(new Error("Disconnected"))
+              : resolve({
+                  data: { command: { old: { template: "Old" } } },
+                  error: undefined,
+                });
+        });
+      h.open();
+      await h.view("Loading prompts");
+      await setImmediate();
+      if (change === "close") {
+        await h.escape();
+      }
+      if (change === "client") {
+        Object.assign(h.api, { client: {} });
+      }
+      if (change === "directory") {
+        Object.assign(h.api.state.path, { directory: "/other" });
+      }
+      if (change === "worktree") {
+        Object.assign(h.api.state.path, { worktree: "/other" });
+      }
+      if (change === "route") {
+        Object.assign(h.api.route, {
+          current: { name: "session", params: { sessionID: "other" } },
+        });
+      }
+      if (change === "dispose") {
+        h.controller.abort();
+      }
+      if (change === "reopen") {
+        h.read = () =>
+          Promise.resolve({
+            data: { command: { new: { template: "New" } } },
+            error: undefined,
+          });
+        h.open();
+        await h.view("Loaded prompts");
+      }
+      const before = h.current;
+      finish();
+      await setImmediate();
+      assert.equal(h.current, before);
+    });
+  }
+}
+
+test("errors are displayed and reopening fetches the current loaded config", async () => {
+  const h = await harness();
+  h.read = () =>
+    Promise.resolve({ data: {}, error: { message: "server error" } });
+  h.open();
   assert.match(
-    (await view("Prompt Composer")).message ?? "",
-    /connection or project changed/,
+    (await h.view("Prompt Composer")).message!,
+    /Could not read loaded prompts/,
   );
-  await assert.rejects(readFile(path), { code: "ENOENT" });
-  Object.assign(api.state.path, { directory });
-  async function openSources() {
-    commands.get("prompt-composer.compose")!();
-    await view("Compose prompts");
-    choose("edit");
-    return view("Prompt settings source");
-  }
-  // Leaving the menu is side-effect free, including native Escape and Back.
-  await openSources();
-  choose("\u0000back");
-  await view("Compose prompts");
-  await assert.rejects(readFile(path), { code: "ENOENT" });
-  await openSources();
-  api.ui.dialog.clear();
-  await view("Compose prompts");
-  await assert.rejects(readFile(path), { code: "ENOENT" });
-  // A concurrent creator must retain its document byte for byte.
-  await openSources();
-  const concurrent = '{"agents":{"review":{"inheritDefaults":false}}}';
-  await writeFile(path, concurrent);
-  choose("create");
-  assert.match((await view("Prompt Composer")).message ?? "", /EEXIST/);
-  assert.equal(await readFile(path, "utf8"), concurrent);
-  await rm(path);
-  await openSources();
-  choose("create");
-  await view("Prompt settings applied");
-  assert.equal(await readFile(path, "utf8"), '{\n  "agents": {}\n}\n');
-  assert.equal(await readFile(sharedPath, "utf8"), sharedText);
-  assert.equal(config.agent!.review!.prompt, "Review\n\nShared default");
-  const existing = await openSources();
+  h.read = () =>
+    Promise.resolve({
+      data: { agent: { fresh: { prompt: "Fresh" } } },
+      error: undefined,
+    });
+  h.open();
   assert.equal(
-    existing.options?.some((option) => option.value === "create"),
-    false,
+    (await h.view("Loaded prompts")).options?.[0].value,
+    "agent:fresh",
   );
-  assert.ok(existing.options.some((option) => option.value === path));
+});
+
+test("retired callbacks cannot reopen pages and Back rebinds active callbacks", async () => {
+  const h = await harness({ command: { check: { template: "Text" } } });
+  h.open();
+  const menu = await h.view("Loaded prompts");
+  const item = menu.options![0];
+  h.choose(item.value);
+  const pages = await h.view("Command: check — pages");
+  menu.onSelect?.(item);
+  await setImmediate();
+  assert.equal(h.current, pages);
+  h.choose("\u0000back");
+  h.choose(item.value);
+  await h.view("Command: check — pages");
+  await h.escape();
+  await h.escape();
+  menu.onSelect?.(item);
+  await setImmediate();
+  assert.equal(h.current, undefined);
+});
+
+for (const change of ["client", "directory", "worktree", "dispose"] as const) {
+  test(`${change} change prevents browsing loaded text from the old context`, async () => {
+    const h = await harness({ command: { check: { template: "Text" } } });
+    h.open();
+    const menu = await h.view("Loaded prompts");
+    if (change === "client") {
+      Object.assign(h.api, { client: {} });
+    }
+    if (change === "directory") {
+      Object.assign(h.api.state.path, { directory: "/other" });
+    }
+    if (change === "worktree") {
+      Object.assign(h.api.state.path, { worktree: "/other" });
+    }
+    if (change === "dispose") {
+      h.controller.abort();
+    }
+    h.choose("command:check");
+    await setImmediate();
+    assert.equal(h.current, menu);
+  });
+}
+
+test("native command dispatch can clear its picker before the viewer opens", async () => {
+  const h = await harness({ command: { check: { template: "Loaded" } } });
+  h.open();
+  // Native command handlers clear their picker after invoking the command.
+  h.api.ui.dialog.clear();
+  assert.equal(
+    (await h.view("Loaded prompts")).options?.[0].value,
+    "command:check",
+  );
 });

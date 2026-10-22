@@ -3,9 +3,7 @@ import { expandIncludes } from "./includes.ts";
 import { SettingsError } from "./errors.ts";
 import { loadSettings } from "./settings.ts";
 import { compose } from "./runtime.ts";
-import { publishState } from "./runtime-state.ts";
-import { verifyInventory, verifyReads } from "./editor.ts";
-import { captureFilesystem } from "./filesystem.ts";
+import { verifyInventory, verifyReads } from "./read-consistency.ts";
 
 interface Bodies {
   agents: Record<string, string>;
@@ -27,14 +25,8 @@ function bodies(config: Config): Bodies {
   };
 }
 const PromptComposer: Plugin = (input, options = {}) => {
-  if (
-    Object.keys(options).some((key) => !["reloadToken"].includes(key)) ||
-    (options.reloadToken !== undefined &&
-      typeof options.reloadToken !== "string")
-  ) {
-    throw new SettingsError(
-      "Prompt Composer plugin options support only reloadToken.",
-    );
+  if (Object.keys(options).length > 0) {
+    throw new SettingsError("Prompt Composer does not accept plugin options.");
   }
   const context = {
     root:
@@ -94,14 +86,6 @@ const PromptComposer: Plugin = (input, options = {}) => {
         console.error(`[Prompt Composer] ${diagnostic}`);
       }
       lastDiagnostic = diagnostic;
-      publishState(
-        config,
-        options,
-        native,
-        context,
-        [...settings.documents, ...composed.reads],
-        await captureFilesystem(context).catch(() => undefined),
-      );
     },
     "tool.execute.after": async (input, output) => {
       if (input.tool !== "skill") {
