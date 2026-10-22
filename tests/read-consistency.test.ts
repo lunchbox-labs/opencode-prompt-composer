@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -65,4 +73,43 @@ test("deleted prompt reads are rejected", async (t) => {
   const f = await fixture(t);
   await rm(f.snippetPath);
   await assert.rejects(verifyReads(f.reads));
+});
+
+test(
+  "retargeted sources with identical text and permissions are rejected",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const f = await fixture(t);
+    const original = join(f.root, ".opencode/prompts/original.md");
+    await rename(f.snippetPath, original);
+    await symlink(original, f.snippetPath);
+    const composition = await compose(
+      { command: { check: { template: "{{include:body.md}}" } } },
+      f.inventory,
+    );
+    const replacement = join(f.root, ".opencode/prompts/replacement.md");
+    await writeFile(replacement, f.reads[0].text);
+    await chmod(replacement, f.reads[0].mode);
+    await rm(f.snippetPath);
+    await symlink(replacement, f.snippetPath);
+    await assert.rejects(
+      verifyReads(composition.reads),
+      /Prompt input changed:/,
+    );
+  },
+);
+
+test("final reads accept the source byte limit and reject growth beyond it", async (t) => {
+  const f = await fixture(t);
+  await writeFile(f.snippetPath, "x".repeat(64 * 1024));
+  const composition = await compose(
+    { command: { check: { template: "{{include:body.md}}" } } },
+    f.inventory,
+  );
+  await verifyReads(composition.reads);
+  await writeFile(f.snippetPath, "x".repeat(64 * 1024 + 1));
+  await assert.rejects(
+    verifyReads(composition.reads),
+    /Prompt sources must be regular files within the size limit\./,
+  );
 });

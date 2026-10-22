@@ -1,12 +1,11 @@
 import type { Config } from "@opencode-ai/plugin";
 import type { PromptInventory } from "./discovery.ts";
-import { expandIncludes } from "./includes.ts";
-import type { SourceFile } from "./read-consistency.ts";
+import { type PromptDependency, expandIncludes } from "./includes.ts";
 import { SettingsError, diagnosticName } from "./errors.ts";
 
 export interface Composition {
   config: Config;
-  reads: SourceFile[];
+  reads: PromptDependency[];
 }
 
 export async function compose(
@@ -14,7 +13,7 @@ export async function compose(
   inventory: PromptInventory,
 ): Promise<Composition> {
   const result = structuredClone(config);
-  const reads: SourceFile[] = [];
+  const reads: PromptDependency[] = [];
   const expand = (text: string, consumer: string) =>
     expandIncludes(text, inventory.files, (file) => reads.push(file), consumer);
   for (const [name, agent] of Object.entries(result.agent ?? {})) {

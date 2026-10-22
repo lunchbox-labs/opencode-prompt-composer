@@ -18,10 +18,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
   api.lifecycle.onDispose(stopWatching);
   const open = async () => {
     const client = api.client;
-    const { directory, worktree } = api.state.path;
-    const sameProject = () =>
-      directory === api.state.path.directory &&
-      worktree === api.state.path.worktree;
+    const { directory } = api.state.path;
     navigation.show(
       () =>
         api.ui.DialogAlert({
@@ -30,8 +27,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
         }),
       true,
     );
-    const check = navigation.checkpoint();
-    const current = () => check() && sameProject();
+    const current = navigation.checkpoint();
     try {
       const response = await client.config.get(
         { directory },
@@ -60,28 +56,20 @@ const PromptComposerTui: TuiPlugin = (api) => {
           };
         },
       );
-      // Rebind callbacks when Back restores a view; retired callbacks stay inert.
       const menu = (
         title: string,
         options: { title: string; value: string }[],
         select: (value: string) => void,
         root = false,
-      ) => {
-        let active = () => false;
-        const render = navigation.select({
-          title,
-          options,
-          onSelect: (selected) => {
-            if (active() && sameProject()) {
-              select(selected.value);
-            }
+      ) =>
+        navigation.menu(
+          {
+            title,
+            options,
+            onSelect: (selected) => select(selected.value),
           },
-        });
-        navigation.show(() => {
-          active = navigation.checkpoint();
-          return render();
-        }, root);
-      };
+          root,
+        );
       const commands = Object.entries(response.data.command ?? {}).map(
         ([name, command]) => ({
           title: `Command: ${name}`,
@@ -149,29 +137,28 @@ const PromptComposerTui: TuiPlugin = (api) => {
       );
     } catch (error) {
       if (current()) {
-        navigation.show(
-          () =>
-            navigation.select({
-              title: "View prompts",
-              options: [
-                {
-                  title: "Retry viewing prompts",
-                  value: "retry",
-                  description:
-                    error instanceof Error
-                      ? error.message
-                      : "Could not read loaded prompts.",
-                },
-                { title: "Reload prompts", value: "reload" },
-              ],
-              onSelect: (selected) => {
-                if (selected.value === "reload") {
-                  reload.run().catch(console.error);
-                } else {
-                  open().catch(console.error);
-                }
+        navigation.menu(
+          {
+            title: "View prompts",
+            options: [
+              {
+                title: "Retry viewing prompts",
+                value: "retry",
+                description:
+                  error instanceof Error
+                    ? error.message
+                    : "Could not read loaded prompts.",
               },
-            })(),
+              { title: "Reload prompts", value: "reload" },
+            ],
+            onSelect: (selected) => {
+              if (selected.value === "reload") {
+                reload.run().catch(console.error);
+              } else {
+                open().catch(console.error);
+              }
+            },
+          },
           true,
         );
       }
