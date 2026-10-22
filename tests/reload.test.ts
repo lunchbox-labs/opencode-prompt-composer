@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { test } from "node:test";
 import type { Config } from "@opencode-ai/plugin";
-import type { TuiPluginApi, TuiPluginMeta } from "@opencode-ai/plugin/tui";
+import type {
+  TuiPluginApi,
+  TuiPluginMeta,
+  TuiToast,
+} from "@opencode-ai/plugin/tui";
 import tui from "../src/tui.ts";
 
 interface View {
@@ -27,6 +31,7 @@ async function harness() {
   let closed: (() => void) | undefined;
   const calls: { method: string; directory?: string; signal?: AbortSignal }[] =
     [];
+  const toasts: TuiToast[] = [];
   const commands = new Map<string, () => void>();
   const listeners = new Set<
     (event: { properties: { directory: string } }) => void
@@ -106,6 +111,9 @@ async function harness() {
       },
     },
     ui: {
+      toast(input: TuiToast) {
+        toasts.push(input);
+      },
       DialogAlert: render,
       DialogSelect: render,
       dialog: {
@@ -130,6 +138,7 @@ async function harness() {
     api,
     controller,
     calls,
+    toasts,
     commands,
     listeners,
     get current() {
@@ -220,6 +229,48 @@ test("root menu reload remains available after a failed preview read", async () 
   h.disposed();
   await h.view("Prompt reload");
   assert.equal(h.calls.filter((call) => call.method === "dispose").length, 1);
+  assert.equal(h.toasts.length, 1);
+  assert.equal(h.toasts[0].variant, "warning");
+});
+
+test("global JSON restart warning waits for exact acknowledgement, teardown and refreshed config", async () => {
+  for (const first of ["acknowledgement", "teardown"] as const) {
+    const h = await harness();
+    const acknowledgement = deferred<{ data: boolean }>();
+    const refreshed = deferred<{ data: Config }>();
+    h.dispose = () => acknowledgement.promise;
+    h.read = () => refreshed.promise;
+    h.run();
+    await h.view("Reloading prompts");
+    assert.deepEqual(h.toasts, []);
+    if (first === "acknowledgement") {
+      acknowledgement.resolve({ data: true });
+    } else {
+      h.disposed();
+    }
+    await setImmediate();
+    assert.deepEqual(h.toasts, []);
+    assert.equal(h.calls.at(-1)?.method, "dispose");
+    if (first === "acknowledgement") {
+      h.disposed();
+    } else {
+      acknowledgement.resolve({ data: true });
+    }
+    await setImmediate();
+    assert.equal(h.calls.at(-1)?.method, "config");
+    assert.deepEqual(h.toasts, []);
+    refreshed.resolve({ data: {} });
+    const result = await h.view("Prompt reload");
+    assert.match(result.message!, /Instance reloaded/);
+    assert.match(result.message!, /composition errors/);
+    assert.deepEqual(h.toasts, [
+      {
+        variant: "warning",
+        message:
+          "Global JSON configuration is not reloaded. Restart OpenCode to apply those changes.",
+      },
+    ]);
+  }
 });
 
 for (const type of ["busy", "retry", "unknown"]) {
@@ -229,6 +280,8 @@ for (const type of ["busy", "retry", "unknown"]) {
     h.run();
     const result = await h.view("Prompt reload");
     assert.match(result.message!, /idle/i);
+    assert.doesNotMatch(result.message!, /restart|Global JSON/i);
+    assert.deepEqual(h.toasts, []);
     assert.deepEqual(
       h.calls.map((call) => call.method),
       ["status"],
@@ -242,6 +295,8 @@ test("unavailable session activity prevents disposal", async () => {
   h.run();
   const result = await h.view("Prompt reload");
   assert.match(result.message!, /Activity unavailable/);
+  assert.doesNotMatch(result.message!, /restart|Global JSON/i);
+  assert.deepEqual(h.toasts, []);
   assert.deepEqual(
     h.calls.map((call) => call.method),
     ["status"],
@@ -258,6 +313,8 @@ test("missing activity data and SDK activity errors prevent disposal", async () 
     h.run();
     const result = await h.view("Prompt reload");
     assert.match(result.message!, /Could not check.*idle/i);
+    assert.doesNotMatch(result.message!, /restart|Global JSON/i);
+    assert.deepEqual(h.toasts, []);
     assert.deepEqual(
       h.calls.map((call) => call.method),
       ["status"],
@@ -279,6 +336,8 @@ test("missing refreshed config data and SDK config errors cannot confirm reload"
     assert.match(result.message!, /could not confirm/i);
     assert.match(result.message!, /Could not read.*configuration/i);
     assert.doesNotMatch(result.message!, /Instance reloaded/);
+    assert.doesNotMatch(result.message!, /Global JSON/i);
+    assert.deepEqual(h.toasts, []);
   }
 });
 
@@ -337,6 +396,7 @@ for (const change of [
     activity.resolve({ data: {} });
     await setImmediate();
     assert.equal(h.current, before);
+    assert.deepEqual(h.toasts, []);
     assert.deepEqual(
       h.calls.map((call) => call.method),
       ["status"],
@@ -355,6 +415,8 @@ test("a failed refresh reports uncertain reload rather than success or rollback"
   assert.match(result.message!, /Refresh unavailable/);
   assert.match(result.message!, /restart/i);
   assert.doesNotMatch(result.message!, /Instance reloaded|rolled back/);
+  assert.doesNotMatch(result.message!, /Global JSON/i);
+  assert.deepEqual(h.toasts, []);
   assert.equal(h.listeners.size, 1);
 });
 
@@ -367,6 +429,8 @@ test("missing teardown event times out, cleans the listener and permits a later 
   deadline.abort();
   const result = await h.view("Prompt reload");
   assert.match(result.message!, /could not confirm/i);
+  assert.doesNotMatch(result.message!, /Global JSON/i);
+  assert.deepEqual(h.toasts, []);
   assert.equal(h.listeners.size, 1);
   assert.deepEqual(
     h.calls.map((call) => call.method),
@@ -392,6 +456,8 @@ test("disposal errors and negative acknowledgements never claim completion", asy
     h.run();
     const result = await h.view("Prompt reload");
     assert.match(result.message!, /could not confirm/i);
+    assert.doesNotMatch(result.message!, /Global JSON/i);
+    assert.deepEqual(h.toasts, []);
     assert.equal(h.listeners.size, 1);
     assert.deepEqual(
       h.calls.map((call) => call.method),
@@ -467,6 +533,7 @@ for (const stage of ["teardown", "refresh"] as const) {
           : before,
       );
       assert.equal(h.calls.length, count);
+      assert.deepEqual(h.toasts, []);
       assert.equal(h.listeners.size, 1);
     });
   }

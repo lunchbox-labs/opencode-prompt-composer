@@ -94,6 +94,11 @@ export function promptReload(
         "Prompt reload",
         "Instance reloaded. OpenCode returned its configuration. Use /view-prompts to inspect loaded text; check OpenCode logs for prompt composition errors. Global JSON edits require restarting OpenCode.",
       );
+      api.ui.toast({
+        variant: "warning",
+        message:
+          "Global JSON configuration is not reloaded. Restart OpenCode to apply those changes.",
+      });
     } catch (error) {
       if (current()) {
         const message =

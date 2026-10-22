@@ -310,6 +310,8 @@ export async function exerciseNativeTerminal(options: {
         "Prompt reload",
         "Instance reloaded",
         "composition errors",
+        "Global JSON configuration is not reloaded.",
+        "Restart OpenCode to apply those changes.",
       );
       await options.verifyReload(stage);
       terminal.write("\x1b");
