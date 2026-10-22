@@ -189,11 +189,11 @@ test(
     );
     const agentPath = join(project, ".opencode/agents/review.md");
     const agentText =
-      "---\ndescription: Review changes\nmode: primary\n---\nReview {{include:review/body.md}}";
+      "---\ndescription: Review changes\nmode: primary\n---\nUse evidence.\n\nReview {{include:review/body.md}}\n\nState uncertainty.";
     await writeFile(agentPath, agentText);
     const helperPath = join(project, ".opencode/agents/helper.md");
     const helperText =
-      "---\ndescription: Optional helper\nmode: subagent\ndisable: true\n---\nHelp {{include:review/body.md}}";
+      "---\ndescription: Optional helper\nmode: subagent\ndisable: true\n---\nHelp {{include:review/body.md}}\n\nState uncertainty.\n\nHelper rule.";
     await writeFile(helperPath, helperText);
     await writeFile(
       join(project, ".opencode/commands/check.md"),
@@ -203,15 +203,9 @@ test(
       join(project, ".opencode/skills/evidence/SKILL.md"),
       "---\nname: evidence\ndescription: Evidence checklist\n---\nSkill {{include:review/body.md}}",
     );
-    const settingsPath = join(project, ".opencode/prompt-composer.jsonc");
-    const settingsText = JSON.stringify({
-      defaults: { append: ["State uncertainty."] },
-      agents: {
-        review: { prepend: ["Use evidence."] },
-        helper: { append: ["Helper rule."] },
-      },
-    });
-    await writeFile(settingsPath, settingsText);
+    const obsoletePath = join(project, ".opencode/prompt-composer.jsonc");
+    const obsoleteText = "{ malformed obsolete policy: ignored";
+    await writeFile(obsoletePath, obsoleteText);
     const tarball = await readFile(join(root, filename));
     const manifest = JSON.parse(
       await readFile(join(plugin, "package.json"), "utf8"),
@@ -489,7 +483,7 @@ test(
       "Check Project evidence $ARGUMENTS {{include:literal.md}}",
     );
     assert.equal(config.command.check.subtask, true);
-    assert.equal(await readFile(settingsPath, "utf8"), settingsText);
+    assert.equal(await readFile(obsoletePath, "utf8"), obsoleteText);
     if (configPlugin !== undefined) {
       assert.equal(config.agent.review.model, "fixture/model", logs);
       assert.equal(config.agent.helper.disable, false);
@@ -499,7 +493,7 @@ test(
       );
       await exerciseConfigEditor(configPlugin, shared, api);
     }
-    await exerciseAgentPromptViewer(plugin, api, settingsPath).catch(
+    await exerciseAgentPromptViewer(plugin, api, agentPath).catch(
       (error: unknown) => {
         throw new Error(`Native prompt viewer failed.\n${logs}`, {
           cause: error,
@@ -534,7 +528,7 @@ test(
       reloaded.command.check.template,
       "Check Project updated $ARGUMENTS {{include:literal.md}}",
     );
-    assert.equal(await readFile(settingsPath, "utf8"), settingsText);
+    assert.equal(await readFile(obsoletePath, "utf8"), obsoleteText);
     if (configPlugin !== undefined) {
       const profilePath = join(project, ".opencode/config-composer.jsonc");
       const profile = JSON.parse(await readFile(profilePath, "utf8")) as {
@@ -553,10 +547,10 @@ test(
       assert.equal(cleared.agent.helper.disable, true);
       assert.equal(
         cleared.agent.helper.prompt,
-        "Help {{include:review/body.md}}",
+        "Help {{include:review/body.md}}\n\nState uncertainty.\n\nHelper rule.",
       );
       await exerciseConfigEditor(configPlugin, shared, api);
-      await exerciseAgentPromptViewer(plugin, api, settingsPath).catch(
+      await exerciseAgentPromptViewer(plugin, api, agentPath).catch(
         (error: unknown) => {
           throw new Error(`Native prompt viewer failed.\n${logs}`, {
             cause: error,
@@ -567,7 +561,7 @@ test(
       assert.equal(config.agent.helper.disable, true);
       assert.equal(
         config.agent.helper.prompt,
-        "Help {{include:review/body.md}}",
+        "Help {{include:review/body.md}}\n\nState uncertainty.\n\nHelper rule.",
       );
       await writeFile(
         helperPath,
@@ -590,18 +584,17 @@ test(
       assert.equal(disabled.agent.helper.disable, true);
       assert.equal(
         disabled.agent.helper.prompt,
-        "Help {{include:review/body.md}}",
+        "Help {{include:review/body.md}}\n\nState uncertainty.\n\nHelper rule.",
       );
     }
     // Check authored files before fixture writes can hide a plugin mutation.
     assert.equal(await readFile(agentPath, "utf8"), agentText);
     assert.equal(await readFile(helperPath, "utf8"), helperText);
 
-    // Command-only includes work independently of agent fragment settings.
+    // Command-only includes work without includes in the active agent body.
     const commandOnlyAgentText =
       "---\ndescription: Review changes\nmode: primary\n---\nReview";
     await writeFile(agentPath, commandOnlyAgentText);
-    await writeFile(settingsPath, "{}");
     const commandOnly = await reload(
       (current) => current.agent.review.prompt === "Review",
     );
@@ -615,7 +608,6 @@ test(
     }
     assert.equal(await readFile(helperPath, "utf8"), helperText);
     assert.equal(await readFile(agentPath, "utf8"), commandOnlyAgentText);
-    assert.equal(await readFile(settingsPath, "utf8"), "{}");
     // Native npm TUI loading and the real terminal preview run on both operating
     // systems, separately from the rendering-replaced viewer checks above.
     await writeFile(
@@ -623,7 +615,6 @@ test(
       JSON.stringify({ plugin: [npmPlugin] }),
     );
     await writeFile(agentPath, agentText);
-    await writeFile(settingsPath, settingsText);
     await reload(
       (current) =>
         current.agent.review.prompt ===

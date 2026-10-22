@@ -21,7 +21,7 @@ interface View {
 export async function exerciseAgentPromptViewer(
   plugin: string,
   request: Request,
-  settingsPath: string,
+  authoredPath: string,
 ) {
   const { default: tui } = (await import(
     pathToFileURL(join(plugin, "dist/tui.js")).href
@@ -31,7 +31,7 @@ export async function exerciseAgentPromptViewer(
     agent: Record<string, { prompt?: string; disable?: boolean }>;
     command: Record<string, { template: string }>;
   };
-  const saved = await readFile(settingsPath, "utf8");
+  const saved = await readFile(authoredPath, "utf8");
   let open = () => {};
   let current: View | undefined;
   let closed: (() => void) | undefined;
@@ -148,7 +148,7 @@ export async function exerciseAgentPromptViewer(
   assert.equal(current, undefined);
   assert.equal(reads, 1);
   assert.deepEqual(await request("/config"), config);
-  assert.equal(await readFile(settingsPath, "utf8"), saved);
+  assert.equal(await readFile(authoredPath, "utf8"), saved);
 }
 
 /** Exercise the same full snapshot loader and revision-checked apply path as Config Composer's TUI. */

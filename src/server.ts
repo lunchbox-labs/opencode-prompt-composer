@@ -1,7 +1,7 @@
 import type { Config, Hooks, Plugin, PluginModule } from "@opencode-ai/plugin";
 import { expandIncludes } from "./includes.ts";
 import { SettingsError } from "./errors.ts";
-import { loadSettings } from "./settings.ts";
+import { discoverPrompts } from "./discovery.ts";
 import { compose } from "./runtime.ts";
 import { verifyInventory, verifyReads } from "./read-consistency.ts";
 
@@ -29,15 +29,10 @@ const PromptComposer: Plugin = (input, options = {}) => {
     throw new SettingsError("Prompt Composer does not accept plugin options.");
   }
   const context = {
-    root:
-      input.worktree !== "" && input.worktree !== "/"
-        ? input.worktree
-        : input.directory,
     directory: input.directory,
     worktree: input.worktree,
   };
   const snapshots = new WeakMap<object, { native: Bodies; applied: Bodies }>();
-  let lastDiagnostic = "";
   return Promise.resolve({
     config: async (config) => {
       const native = structuredClone(config);
@@ -61,13 +56,10 @@ const PromptComposer: Plugin = (input, options = {}) => {
           }
         }
       }
-      const settings = await loadSettings(context);
-      const composed = await compose(native, settings);
-      await verifyReads(
-        [...settings.documents, ...composed.reads],
-        settings.missing,
-      );
-      await verifyInventory(settings);
+      const inventory = await discoverPrompts(context);
+      const composed = await compose(native, inventory);
+      await verifyReads(composed.reads);
+      await verifyInventory(context, inventory);
       // Publish only once the entire composition succeeds. Preserve all host metadata.
       if (composed.config.agent !== undefined) {
         config.agent = composed.config.agent;
@@ -79,13 +71,6 @@ const PromptComposer: Plugin = (input, options = {}) => {
         native: bodies(native),
         applied: bodies(composed.config),
       });
-      const diagnostic = composed.diagnostics
-        .map((item) => item.message)
-        .join("\n");
-      if (diagnostic !== "" && diagnostic !== lastDiagnostic) {
-        console.error(`[Prompt Composer] ${diagnostic}`);
-      }
-      lastDiagnostic = diagnostic;
     },
     "tool.execute.after": async (input, output) => {
       if (input.tool !== "skill") {
@@ -103,11 +88,10 @@ const PromptComposer: Plugin = (input, options = {}) => {
         );
       }
       if (output.output.includes("{{include:")) {
-        const settings = await loadSettings(context);
+        const inventory = await discoverPrompts(context);
         output.output = await expandIncludes(
           output.output,
-          settings.inventory.files,
-          undefined,
+          inventory.files,
           undefined,
           "skill output (source file unavailable)",
         );

@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -26,7 +27,6 @@ async function expandIncludes(
   text: string,
   root: string,
   onRead?: (read: PromptDependency) => void,
-  overlays?: ReadonlyMap<string, string>,
 ) {
   const names = await readdir(root, { recursive: true });
   return expand(
@@ -38,7 +38,6 @@ async function expandIncludes(
       ]),
     ),
     onRead,
-    overlays,
   );
 }
 
@@ -62,16 +61,11 @@ test("nested includes preserve escaped markers and report source dependencies", 
     reads.map((read) => read.path),
     [join(root, "prompts/outer.md"), join(root, "prompts/inner.txt")],
   );
-  assert.equal(reads[0].writable, false);
   assert.equal(
-    await expandIncludes(
-      "{{include:outer.md}}",
-      sources,
-      undefined,
-      new Map([[join(root, "prompts/inner.txt"), "preview"]]),
-    ),
-    "Review preview",
+    reads[0].canonicalPath,
+    await realpath(join(root, "prompts/outer.md")),
   );
+  assert.equal(reads[0].text, "Review {{include:inner.txt}}");
 });
 
 test("rejects unsafe and malformed references without reading outside the alias", async (t) => {
@@ -145,7 +139,7 @@ test("enforces text, snippet, composed-size, count and nesting budgets", async (
     expandIncludes("{{include:valid.md}}".repeat(5), sources),
     /256 KiB/,
   );
-  await assert.rejects(expandIncludes("x".repeat(262145), sources), /256 KiB/);
+
   await writeFile(join(root, "prompts/empty.md"), "");
   await assert.rejects(
     expandIncludes("{{include:empty.md}}".repeat(257), sources),
@@ -214,4 +208,9 @@ test("unsafe marker payloads cannot dump body text into diagnostics", async (t) 
       return true;
     },
   );
+});
+
+test("marker-free text bypasses the include byte budget", async () => {
+  const text = "Native " + "x".repeat(262145);
+  assert.equal(await expand(text, new Map()), text);
 });
