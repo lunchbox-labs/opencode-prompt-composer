@@ -240,14 +240,14 @@ export async function exerciseNativeTerminal(options: {
       terminal.promptFocused,
       "main conversation input focus",
     );
-    terminal.write("/compose-prompts");
+    terminal.write("/agent-prompts");
     await terminal.waitFor(
-      () => terminal.echoed("/compose-prompts"),
+      () => terminal.echoed("/agent-prompts"),
       "slash command input echo",
     );
-    await terminal.wait("View loaded prompts");
+    await terminal.wait("View agent prompts");
     terminal.write("\r");
-    await terminal.wait("Loaded prompts", "Agent: review");
+    await terminal.wait("Loaded agent prompts", "Agent: review");
     for (const label of ["Agent: review", "Page 1 of 1"]) {
       await terminal.waitFor(
         terminal.focused,

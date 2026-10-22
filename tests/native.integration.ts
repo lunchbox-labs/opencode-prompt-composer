@@ -16,8 +16,8 @@ import { setTimeout } from "node:timers/promises";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import {
+  exerciseAgentPromptViewer,
   exerciseConfigEditor,
-  exercisePromptViewer,
 } from "./native-editors.ts";
 import { resolveNativeVersion, verifyNativeVersion } from "./native-host.ts";
 import { exerciseNativeTerminal } from "./native-terminal.ts";
@@ -493,7 +493,7 @@ test(
       );
       await exerciseConfigEditor(configPlugin, shared, api);
     }
-    await exercisePromptViewer(plugin, api, agentPath).catch(
+    await exerciseAgentPromptViewer(plugin, api, agentPath).catch(
       (error: unknown) => {
         throw new Error(`Native prompt viewer failed.\n${logs}`, {
           cause: error,
@@ -550,7 +550,7 @@ test(
         "Help {{include:review/body.md}}\n\nState uncertainty.\n\nHelper rule.",
       );
       await exerciseConfigEditor(configPlugin, shared, api);
-      await exercisePromptViewer(plugin, api, agentPath).catch(
+      await exerciseAgentPromptViewer(plugin, api, agentPath).catch(
         (error: unknown) => {
           throw new Error(`Native prompt viewer failed.\n${logs}`, {
             cause: error,
