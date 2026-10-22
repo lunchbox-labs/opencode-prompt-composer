@@ -240,15 +240,15 @@ export async function exerciseNativeTerminal(options: {
       terminal.promptFocused,
       "main conversation input focus",
     );
-    terminal.write("/agent-prompts");
+    terminal.write("/view-prompts");
     await terminal.waitFor(
-      () => terminal.echoed("/agent-prompts"),
+      () => terminal.echoed("/view-prompts"),
       "slash command input echo",
     );
-    await terminal.wait("View agent prompts");
+    await terminal.wait("View prompts");
     terminal.write("\r");
-    await terminal.wait("Loaded agent prompts", "Agent: review");
-    for (const label of ["Agent: review", "Page 1 of 1"]) {
+    await terminal.wait("View prompts", "Agents", "Commands");
+    const select = async (label: string, title: string) => {
       await terminal.waitFor(
         terminal.focused,
         "focused preview chooser search",
@@ -259,13 +259,24 @@ export async function exerciseNativeTerminal(options: {
         `highlighted ${label} option`,
       );
       terminal.write("\r");
-      await terminal.wait(
-        label === "Agent: review"
-          ? "Agent: review — pages"
-          : "Agent: review — page 1/1",
-      );
-    }
+      await terminal.wait(title);
+    };
+    await select("Agents", "Loaded agent prompts");
+    await select("Agent: review", "Agent: review — pages");
+    await select("Page 1 of 1", "Agent: review — page 1/1");
     await terminal.wait("Review Project updated", "State uncertainty.");
+    terminal.write("\x1b");
+    await terminal.wait("Agent: review — pages");
+    terminal.write("\x1b");
+    await terminal.wait("Loaded agent prompts");
+    terminal.write("\x1b");
+    await terminal.wait("View prompts", "Agents", "Commands");
+    await select("Commands", "Loaded command templates");
+    await select("Command: check", "Command: check — pages");
+    await select("Page 1 of 1", "Command: check — page 1/1");
+    await terminal.wait(
+      "Check Project updated $ARGUMENTS {{include:literal.md}}",
+    );
   } finally {
     await terminal.stop();
   }

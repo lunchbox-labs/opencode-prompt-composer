@@ -36,6 +36,8 @@ Prompt files live in `prompts/` under OpenCode's configuration directories. Late
 
 Skill bodies expand through the native `skill` tool; automatically generated skill slash commands do not expand includes.
 
+Run `/view-prompts`, choose Agents or Commands, then select a component to read its complete loaded text. Skill composition is supported, but the viewer omits skills due to API limitations.
+
 ## Documentation
 
 - [Usage](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Usage)

@@ -13,8 +13,8 @@ const PromptComposerTui: TuiPlugin = (api) => {
     navigation.show(
       () =>
         api.ui.DialogAlert({
-          title: "Loading agent prompts",
-          message: "Reading loaded agent prompt text…",
+          title: "Loading prompts",
+          message: "Reading loaded agent prompts and command templates…",
         }),
       true,
     );
@@ -29,9 +29,9 @@ const PromptComposerTui: TuiPlugin = (api) => {
         return;
       }
       if (response.error !== undefined) {
-        throw new Error("Could not read loaded agent prompts from OpenCode.");
+        throw new Error("Could not read loaded prompts from OpenCode.");
       }
-      const entries = Object.entries(response.data.agent ?? {}).map(
+      const agents = Object.entries(response.data.agent ?? {}).map(
         ([name, agent]) => {
           const fallback =
             agent?.prompt === undefined || agent.prompt.trim() === "";
@@ -70,31 +70,65 @@ const PromptComposerTui: TuiPlugin = (api) => {
           return render();
         }, root);
       };
+      const commands = Object.entries(response.data.command ?? {}).map(
+        ([name, command]) => ({
+          title: `Command: ${name}`,
+          value: `command:${name}`,
+          text: command.template,
+        }),
+      );
+      const components = (
+        title: string,
+        entries: { title: string; value: string; text: string }[],
+        empty: string,
+      ) =>
+        menu(
+          title,
+          entries.length > 0
+            ? entries.map(({ title, value }) => ({ title, value }))
+            : [{ title: empty, value: "empty" }],
+          (value) => {
+            const entry = entries.find((item) => item.value === value);
+            if (entry === undefined) {
+              return;
+            }
+            const pages = previewPages(entry.text);
+            menu(
+              `${entry.title} — pages`,
+              pages.map((_, index) => ({
+                title: `Page ${index + 1} of ${pages.length}`,
+                value: String(index),
+              })),
+              (value) => {
+                const index = Number(value);
+                navigation.alert({
+                  title: `${entry.title} — page ${index + 1}/${pages.length}`,
+                  message: pages[index] === "" ? "(empty text)" : pages[index],
+                });
+              },
+            );
+          },
+        );
       menu(
-        "Loaded agent prompts",
-        entries.length > 0
-          ? entries.map(({ title, value }) => ({ title, value }))
-          : [{ title: "No configured agent prompts", value: "empty" }],
+        "View prompts",
+        [
+          { title: "Agents", value: "agents" },
+          { title: "Commands", value: "commands" },
+        ],
         (value) => {
-          const entry = entries.find((item) => item.value === value);
-          if (entry === undefined) {
-            return;
+          if (value === "agents") {
+            components(
+              "Loaded agent prompts",
+              agents,
+              "No configured agent prompts",
+            );
+          } else if (value === "commands") {
+            components(
+              "Loaded command templates",
+              commands,
+              "No configured command templates",
+            );
           }
-          const pages = previewPages(entry.text);
-          menu(
-            `${entry.title} — pages`,
-            pages.map((_, index) => ({
-              title: `Page ${index + 1} of ${pages.length}`,
-              value: String(index),
-            })),
-            (value) => {
-              const index = Number(value);
-              navigation.alert({
-                title: `${entry.title} — page ${index + 1}/${pages.length}`,
-                message: pages[index] === "" ? "(empty text)" : pages[index],
-              });
-            },
-          );
         },
         true,
       );
@@ -107,7 +141,7 @@ const PromptComposerTui: TuiPlugin = (api) => {
               message:
                 error instanceof Error
                   ? error.message
-                  : "Could not read loaded agent prompts.",
+                  : "Could not read loaded prompts.",
             }),
           true,
         );
@@ -117,11 +151,11 @@ const PromptComposerTui: TuiPlugin = (api) => {
   const unregister = api.keymap.registerLayer({
     commands: [
       {
-        name: "prompt-composer.agent-prompts",
-        title: "View agent prompts",
+        name: "prompt-composer.view-prompts",
+        title: "View prompts",
         namespace: "palette",
         category: "Prompts",
-        slashName: "agent-prompts",
+        slashName: "view-prompts",
         // Native command dispatch clears its picker after invoking the handler.
         run: () => Promise.resolve().then(open),
       },
