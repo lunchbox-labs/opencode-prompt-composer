@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -60,7 +61,10 @@ test("nested includes preserve escaped markers and report source dependencies", 
     reads.map((read) => read.path),
     [join(root, "prompts/outer.md"), join(root, "prompts/inner.txt")],
   );
-  assert.equal(reads[0].canonicalPath, join(root, "prompts/outer.md"));
+  assert.equal(
+    reads[0].canonicalPath,
+    await realpath(join(root, "prompts/outer.md")),
+  );
   assert.equal(reads[0].text, "Review {{include:inner.txt}}");
 });
 
