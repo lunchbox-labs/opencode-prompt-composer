@@ -116,11 +116,15 @@ export function dialogNavigation(api: TuiPluginApi) {
       display(parent);
     }
   };
-  const select = (props: TuiDialogSelectProps<string>) => {
+  const select = (
+    props: TuiDialogSelectProps<string>,
+    render: (props: TuiDialogSelectProps<string>) => ReturnType<Render> = api.ui
+      .DialogSelect,
+  ) => {
     let selected = props.current;
     return () => {
       const check = checkpoint();
-      return api.ui.DialogSelect({
+      return render({
         ...props,
         get current() {
           return selected;
@@ -162,8 +166,11 @@ export function dialogNavigation(api: TuiPluginApi) {
       });
     };
   };
-  const menu = (props: TuiDialogSelectProps<string>, root = false) =>
-    show(select(props), root);
+  const menu = (
+    props: TuiDialogSelectProps<string>,
+    root = false,
+    render?: (props: TuiDialogSelectProps<string>) => ReturnType<Render>,
+  ) => show(select(props, render), root);
   const alert = (props: Parameters<TuiPluginApi["ui"]["DialogAlert"]>[0]) =>
     show(() => api.ui.DialogAlert(props));
   return {
@@ -175,6 +182,12 @@ export function dialogNavigation(api: TuiPluginApi) {
     close,
     reset,
     checkpoint,
+    refresh() {
+      const current = frames.at(-1);
+      if (current !== undefined) {
+        display(current);
+      }
+    },
     get canGoBack() {
       return frames.length > 1;
     },

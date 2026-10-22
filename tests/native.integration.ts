@@ -203,6 +203,10 @@ test(
     const helperText =
       "---\ndescription: Optional helper\nmode: subagent\ndisable: true\n---\nHelp {{include:review/body.md}}\n\nState uncertainty.\n\nHelper rule.";
     await writeFile(helperPath, helperText);
+    const buildPath = join(project, ".opencode/agents/build.md");
+    const buildText =
+      "---\ndescription: Custom build instructions\nmode: primary\n---\nBuild override {{include:review/body.md}}";
+    await writeFile(buildPath, buildText);
     await writeFile(
       join(project, ".opencode/commands/check.md"),
       "---\ndescription: Native command\nagent: review\nsubtask: true\n---\nCheck {{include:review/body.md}} $ARGUMENTS \\{{include:literal.md}}",
@@ -805,12 +809,29 @@ test(
       restartedSkillText,
     );
     const terminalSession = (await api("/session", {})) as { id: string };
+    const loadedAgents = (await api("/agent")) as {
+      name: string;
+      native?: boolean;
+      prompt?: string;
+    }[];
+    const builtin = loadedAgents.find(
+      (agent) =>
+        agent.native === true &&
+        !Object.hasOwn(restarted.agent, agent.name) &&
+        agent.prompt !== undefined &&
+        agent.prompt !== "",
+    );
+    assert.ok(
+      builtin !== undefined,
+      "Native terminal fixture needs a built-in prompt",
+    );
     const beforeTerminal = received.length;
     assert.ok(url !== undefined);
     await exerciseNativeTerminal({
       binary,
       url,
       sessionID: terminalSession.id,
+      builtin: builtin.name,
       project,
       env,
       signal: t.signal,
@@ -822,6 +843,7 @@ test(
     );
     assert.equal(await readFile(agentPath, "utf8"), agentText);
     assert.equal(await readFile(helperPath, "utf8"), helperText);
+    assert.equal(await readFile(buildPath, "utf8"), buildText);
     assert.equal(await readFile(obsoletePath, "utf8"), obsoleteText);
   },
 );

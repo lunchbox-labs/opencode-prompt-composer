@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
@@ -90,6 +91,7 @@ test(
     await writeFile(
       join(root, "consumer.mjs"),
       `import assert from 'node:assert/strict';
+import { fixedMenuApi, fixedMenuView } from ${JSON.stringify(pathToFileURL(resolve("tests/fixed-menu-harness.ts")).href)};
 import plugin from '@lunchbox-labs/opencode-prompt-composer';
 import tui from '@lunchbox-labs/opencode-prompt-composer/tui';
 assert.equal(tui.id, 'prompt-composer');
@@ -109,13 +111,14 @@ let reads = 0;
 const commands = [];
 const render = (view) => { current = view; };
 await tui.tui({
+  ...fixedMenuApi,
   event: { on() { return () => {}; } },
   state: { path: { directory: '/remote/project', worktree: '/remote/project' } },
   route: { current: { name: 'home' } },
   lifecycle: { signal: new AbortController().signal, onDispose() {} },
   keymap: { registerLayer(layer) { commands.push(...layer.commands); open = layer.commands[0].run; return () => {}; } },
-  client: { config: { async get(input) { assert.equal(input.directory, '/remote/project'); reads++; return { data: config }; } } },
-  ui: { DialogSelect: render, DialogAlert: render, dialog: { replace(next) { next(); }, get open() { return current !== undefined; } } },
+  client: { app: { async agents() { return { data: [] }; } }, config: { async get(input) { assert.equal(input.directory, '/remote/project'); reads++; return { data: config }; } } },
+  ui: { DialogSelect: render, DialogAlert: render, dialog: { replace(next) { const fixed = fixedMenuView(next()); if (fixed) current = fixed; }, get open() { return current !== undefined; } } },
 }, undefined, {});
 assert.deepEqual(commands.map(({ name, slashName }) => ({ name, slashName })), [{ name: 'prompt-composer.view-prompts', slashName: 'view-prompts' }]);
 const choose = (value) => { const item = current.options.find((item) => item.value === value); assert.ok(item); current.onSelect(item); };

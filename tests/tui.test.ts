@@ -4,6 +4,7 @@ import { test } from "node:test";
 import type { Config } from "@opencode-ai/plugin";
 import type { TuiPluginApi, TuiPluginMeta } from "@opencode-ai/plugin/tui";
 import tui from "../src/tui.ts";
+import { fixedMenuApi, fixedMenuView } from "./fixed-menu-harness.ts";
 
 interface View {
   title: string;
@@ -11,9 +12,13 @@ interface View {
   onSelect?: (item: { title: string; value: string }) => void;
   message?: string;
   description?: string;
+  renderFilter?: boolean;
 }
 
-async function harness(config: Config = {}) {
+async function harness(
+  config: Config = {},
+  agents: { name: string; native?: boolean; prompt?: string }[] = [],
+) {
   let current: View | undefined;
   let closed: (() => void) | undefined;
   let open = () => {};
@@ -24,11 +29,17 @@ async function harness(config: Config = {}) {
   const reads: { directory: string; signal?: AbortSignal }[] = [];
   let read: () => Promise<{ data: Config; error?: unknown }> = () =>
     Promise.resolve({ data: config });
+  let readAgents: () => Promise<{
+    data: typeof agents;
+    error?: unknown;
+  }> = () => Promise.resolve({ data: agents, error: undefined });
+  const agentReads: { directory: string; signal?: AbortSignal }[] = [];
   const controller = new AbortController();
   const render = (view: View) => {
     current = view;
   };
   const api = {
+    ...fixedMenuApi,
     // This server path need not exist on the TUI machine.
     state: {
       path: {
@@ -60,6 +71,15 @@ async function harness(config: Config = {}) {
     },
     client: new Proxy(
       {
+        app: {
+          async agents(
+            input: { directory: string },
+            options?: { signal?: AbortSignal },
+          ) {
+            agentReads.push({ ...input, signal: options?.signal });
+            return readAgents();
+          },
+        },
         config: {
           async get(
             input: { directory: string },
@@ -72,12 +92,11 @@ async function harness(config: Config = {}) {
       },
       {
         get(target, property) {
-          assert.equal(
-            property,
-            "config",
+          assert.ok(
+            property === "config" || property === "app",
             `Unexpected client API: ${String(property)}`,
           );
-          return target.config;
+          return target[property];
         },
       },
     ),
@@ -85,10 +104,14 @@ async function harness(config: Config = {}) {
       DialogSelect: render,
       DialogAlert: render,
       dialog: {
-        replace(next: () => void, onClose?: () => void) {
+        replace(next: () => unknown, onClose?: () => void) {
           closed?.();
           closed = onClose;
-          next();
+          const element = next();
+          const fixed = fixedMenuView(element);
+          if (fixed !== undefined) {
+            current = fixed;
+          }
         },
         clear() {
           closed?.();
@@ -124,6 +147,10 @@ async function harness(config: Config = {}) {
     controller,
     commands,
     reads,
+    agentReads,
+    set readAgents(fn: typeof readAgents) {
+      readAgents = fn;
+    },
     view,
     choose,
     disposed(directory = api.state.path.directory) {
@@ -169,7 +196,9 @@ test("viewer registers prompt commands and preserves loaded text without executi
   h.choose("agents");
   const menu = await h.view("Loaded agent prompts");
   assert.deepEqual(
-    menu.options?.filter((item) => item.value !== "\u0000back"),
+    menu.options?.filter(
+      (item) => item.value !== "\u0000back" && item.value !== "\u0000builtins",
+    ),
     [{ title: "Agent: check", value: "agent:check" }],
   );
   assert.equal(h.reads.length, 1);
@@ -226,7 +255,7 @@ test("agent pages retain full Unicode text and label disabled and native fallbac
     menu.options!.find((item) => item.value === "agent:off")?.title,
     "Agent: off (disabled)",
   );
-  for (const name of ["build", "blank", "empty"]) {
+  for (const name of ["build", "empty"]) {
     const title = `Agent: ${name} (native fallback)`;
     assert.equal(
       menu.options!.find((item) => item.value === `agent:${name}`)?.title,
@@ -237,7 +266,7 @@ test("agent pages retain full Unicode text and label disabled and native fallbac
     h.choose("0");
     assert.equal(
       (await h.view(`${title} — page 1/1`)).message,
-      "(native fallback — no configured prompt text)",
+      "(native fallback — no agent prompt text available)",
     );
     await h.escape();
     h.choose("\u0000back");
@@ -288,7 +317,10 @@ test("empty categories retain both choices and show truthful empty states", asyn
       const menu = await h.view(title);
       if (entries === undefined) {
         assert.deepEqual(
-          menu.options?.filter((item) => item.value !== "\u0000back"),
+          menu.options?.filter(
+            (item) =>
+              item.value !== "\u0000back" && item.value !== "\u0000builtins",
+          ),
           [{ title: empty, value: "empty" }],
         );
         h.choose("empty");
@@ -575,4 +607,167 @@ test("external disposal leaves unrelated dialogs alone", async () => {
   h.disposed();
   await setImmediate();
   assert.equal((await h.view("Unrelated")).message, "Keep this open");
+});
+
+test("fixed menus hide search while dynamic component lists retain it", async () => {
+  const h = await harness({ agent: { review: { prompt: "Text" } } });
+  h.open();
+  assert.equal((await h.view("View prompts")).renderFilter, false);
+  h.choose("agents");
+  assert.notEqual((await h.view("Loaded agent prompts")).renderFilter, false);
+  h.choose("\u0000back");
+  h.choose("commands");
+  assert.notEqual(
+    (await h.view("Loaded command templates")).renderFilter,
+    false,
+  );
+  h.read = () => Promise.resolve({ data: {}, error: "offline" });
+  h.open();
+  assert.equal((await h.view("View prompts")).renderFilter, false);
+});
+
+test("native metadata hides only unconfigured built-ins and the toggle replaces its menu", async () => {
+  const h = await harness(
+    {
+      agent: {
+        build: { prompt: "Authored override" },
+        plan: { name: "planner", prompt: "Renamed override" },
+        off: { disable: true, prompt: "Disabled" },
+        custom: { prompt: "Authored custom" },
+      },
+    },
+    [
+      { name: "build", native: true, prompt: "Authored override" },
+      { name: "planner", native: true, prompt: "Renamed override" },
+      { name: "native-future-name", native: true, prompt: "Native full body" },
+      { name: "explore", native: false, prompt: "Custom API agent" },
+      { name: "unknown", prompt: "Unknown origin" },
+    ],
+  );
+  h.open();
+  await h.view("View prompts");
+  h.choose("agents");
+  let menu = await h.view("Loaded agent prompts");
+  const values = () => menu.options!.map((item) => item.value);
+  assert.ok(!values().includes("agent:native-future-name"));
+  for (const name of ["build", "plan", "off", "custom", "explore", "unknown"]) {
+    assert.ok(values().includes(`agent:${name}`), name);
+  }
+  assert.ok(
+    !values().includes("agent:planner"),
+    "renamed override is not duplicated",
+  );
+  assert.equal(
+    menu.options!.find((item) => item.value === "\u0000builtins")?.title,
+    "Show built-in agents",
+  );
+  const retired = menu;
+  h.choose("\u0000builtins");
+  menu = await h.view("Loaded agent prompts");
+  assert.ok(values().includes("agent:native-future-name"));
+  assert.equal(
+    menu.options!.find((item) => item.value === "\u0000builtins")?.title,
+    "Hide built-in agents",
+  );
+  retired.onSelect?.(
+    retired.options!.find((item) => item.value === "\u0000builtins")!,
+  );
+  assert.equal(h.current, menu, "retired toggle cannot change active view");
+  h.choose("agent:native-future-name");
+  await h.view("Agent: native-future-name (built-in) — pages");
+  h.choose("0");
+  assert.equal(
+    (await h.view("Agent: native-future-name (built-in) — page 1/1")).message,
+    "Native full body",
+  );
+  await h.escape();
+  h.choose("\u0000back");
+  h.choose("\u0000builtins");
+  menu = await h.view("Loaded agent prompts");
+  assert.ok(!values().includes("agent:native-future-name"));
+  h.choose("\u0000back");
+  await h.view("View prompts");
+  h.choose("agents");
+  menu = await h.view("Loaded agent prompts");
+  h.choose("\u0000builtins");
+  h.open();
+  await h.view("View prompts");
+  h.choose("agents");
+  menu = await h.view("Loaded agent prompts");
+  assert.ok(
+    !values().includes("agent:native-future-name"),
+    "new viewer defaults to hidden",
+  );
+});
+
+test("an empty default agent list still offers the built-in toggle", async () => {
+  const h = await harness({}, [{ name: "native-new", native: true }]);
+  h.open();
+  await h.view("View prompts");
+  h.choose("agents");
+  assert.equal(
+    (await h.view("Loaded agent prompts")).options![0].title,
+    "No configured agent prompts",
+  );
+  h.choose("\u0000builtins");
+  assert.ok(
+    (await h.view("Loaded agent prompts")).options!.some(
+      (item) => item.value === "agent:native-new",
+    ),
+  );
+});
+
+test("runtime fallback requires an unambiguous active agent and preserves whitespace bodies", async () => {
+  const h = await harness(
+    {
+      agent: {
+        explore: {},
+        ambiguous: { name: "shared" },
+        disabled: { name: "explore", disable: true },
+        blank: { prompt: " \n\t" },
+      },
+    },
+    [
+      { name: "explore", native: true, prompt: "Effective native body" },
+      { name: "shared", native: true, prompt: "Wrong native body" },
+      { name: "shared", native: false, prompt: "Wrong custom body" },
+    ],
+  );
+  h.open();
+  await h.view("View prompts");
+  h.choose("agents");
+  for (const [name, title, expected] of [
+    ["explore", "Agent: explore", "Effective native body"],
+    ["blank", "Agent: blank", " \n\t"],
+    [
+      "ambiguous",
+      "Agent: ambiguous (native fallback)",
+      "(native fallback — no agent prompt text available)",
+    ],
+    [
+      "disabled",
+      "Agent: disabled (disabled, native fallback)",
+      "(native fallback — no agent prompt text available)",
+    ],
+  ]) {
+    h.choose(`agent:${name}`);
+    await h.view(`${title} — pages`);
+    h.choose("0");
+    assert.equal((await h.view(`${title} — page 1/1`)).message, expected);
+    await h.escape();
+    h.choose("\u0000back");
+  }
+});
+
+test("agent metadata failures do not guess built-in origins", async () => {
+  const h = await harness({ agent: { build: { prompt: "Configured" } } });
+  h.readAgents = () => Promise.resolve({ data: [], error: "Disconnected" });
+  h.open();
+  const retry = await h.view("View prompts");
+  assert.deepEqual(
+    retry.options?.map((item) => item.value),
+    ["retry"],
+  );
+  assert.equal(h.agentReads[0].directory, h.api.state.path.directory);
+  assert.equal(h.agentReads[0].signal, h.controller.signal);
 });
