@@ -10,13 +10,7 @@ const codeFiles = ["src/**/*.ts", "tests/**/*.{mjs,ts}", "scripts/**/*.mjs"];
 const typedFiles = ["src/**/*.ts", "tests/**/*.ts"];
 
 export default defineConfig(
-  // The negative import fixture is compiled only against the installed tarball by test:package.
-  globalIgnores([
-    "**/node_modules/**",
-    "**/coverage/**",
-    "**/dist/**",
-    "tests/installed-declarations.ts",
-  ]),
+  globalIgnores(["**/node_modules/**", "**/coverage/**", "**/dist/**"]),
   {
     files: [...codeFiles, "*.config.mjs"],
     extends: [

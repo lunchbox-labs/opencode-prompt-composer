@@ -13,6 +13,5 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"],
-  "exclude": ["tests/installed-declarations.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
 }
