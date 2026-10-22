@@ -714,7 +714,14 @@ test(
         "Use evidence.\n\nReview Project updated\n\nState uncertainty.",
     );
     const terminalSession = (await api("/session", {})) as { id: string };
-    const beforeTerminal = received.length;
+    let beforeTerminal = received.length;
+    let expectedAgent = "";
+    let expectedCommand = "";
+    let expectedSkill = "";
+    let expectedNested = "";
+    let expectedGlobal = "";
+    let expectedProject = "";
+    let terminalModelRequests = 0;
     await exerciseNativeTerminal({
       binary,
       url,
@@ -722,11 +729,190 @@ test(
       project,
       env,
       signal: t.signal,
+      async editPrompts(stage) {
+        assert.equal(
+          received.length,
+          beforeTerminal,
+          "Viewing prompts must not send a model request",
+        );
+        if (stage === "broken") {
+          await writeFile(
+            agentPath,
+            expectedAgent.replace("review/body.md", "missing.md"),
+          );
+          return;
+        }
+        expectedAgent = agentText.replace(
+          "Review {{include:",
+          `${stage} agent {{include:`,
+        );
+        expectedCommand = `---\ndescription: Native command\nagent: review\nsubtask: true\n---\n${stage} command {{include:review/body.md}} $ARGUMENTS \\{{include:literal.md}}`;
+        expectedSkill = `---\nname: evidence\ndescription: Evidence checklist\n---\n${stage} skill {{include:review/body.md}}\n\\{{include:literal.md}}`;
+        expectedNested = stage;
+        await writeFile(agentPath, expectedAgent);
+        await writeFile(
+          join(project, ".opencode/commands/check.md"),
+          expectedCommand,
+        );
+        await writeFile(join(skillDirectory, "SKILL.md"), expectedSkill);
+        await writeFile(
+          join(project, ".opencode/prompts/review/nested.txt"),
+          expectedNested,
+        );
+        // Global JSON is process-cached by the supported host. Instance reload
+        // must not pretend to invalidate it or rewrite it as a workaround.
+        const globalPath = join(shared, "opencode.jsonc");
+        const globalConfig = JSON.parse(await readFile(globalPath, "utf8")) as {
+          default_agent: string;
+        };
+        globalConfig.default_agent = "build";
+        expectedGlobal = JSON.stringify(globalConfig);
+        await writeFile(globalPath, expectedGlobal);
+        // Project JSON is reread on instance load, unlike ordinary global JSON.
+        expectedProject = JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          command: {
+            project_json: {
+              template: `${stage} JSON {{include:review/body.md}}`,
+            },
+          },
+        });
+        await writeFile(join(project, "opencode.jsonc"), expectedProject);
+      },
+      async verifyReload(stage) {
+        assert.equal(
+          received.length,
+          beforeTerminal,
+          "Reloading prompts must not send a model request",
+        );
+        const loaded = (await api("/config")) as typeof config & {
+          default_agent: string;
+        };
+        if (stage === "broken") {
+          try {
+            assert.ok(
+              loaded.agent.review.prompt.includes("{{include:missing.md}}"),
+              "OpenCode swallows the failed composition hook and returns native uncomposed text",
+            );
+            assert.ok(
+              loaded.command.check.template.includes(
+                "{{include:review/body.md}}",
+              ),
+              "Failed composition must publish no partial agent/command results",
+            );
+            assert.match(logs, /missing\.md/);
+          } finally {
+            await writeFile(agentPath, expectedAgent);
+          }
+          return;
+        }
+        assert.equal(
+          loaded.agent.review.prompt,
+          `Use evidence.\n\n${stage} agent Project ${stage}\n\nState uncertainty.`,
+        );
+        assert.equal(
+          loaded.command.check.template,
+          `${stage} command Project ${stage} $ARGUMENTS {{include:literal.md}}`,
+        );
+        assert.equal(
+          loaded.default_agent,
+          "review",
+          "Current-instance disposal does not invalidate process-cached global JSON",
+        );
+        assert.equal(
+          loaded.command.project_json.template,
+          `${stage} JSON Project ${stage}`,
+          "Current-instance reload rereads and composes added or edited project JSON",
+        );
+        const commands = (await api("/command")) as {
+          name: string;
+          template: string;
+        }[];
+        assert.ok(
+          commands
+            .find((command) => command.name === "evidence")
+            ?.template.startsWith(
+              `${stage} skill {{include:review/body.md}}`,
+            ) === true,
+          "Native skill cache must reread SKILL.md",
+        );
+        const session = (await api("/session", {})) as { id: string };
+        const start = received.length;
+        const message = await api(`/session/${session.id}/message`, {
+          agent: "review",
+          model: { providerID: "fixture", modelID: "model" },
+          parts: [{ type: "text", text: "Load evidence after reload." }],
+        });
+        assert.match(JSON.stringify(message), /Verified/);
+        const requests = received.slice(start);
+        assert.ok(
+          requests.some((body) =>
+            body.includes(`${stage} agent Project ${stage}`),
+          ),
+          "The next model request must receive the refreshed agent",
+        );
+        assert.ok(
+          requests.some((body) =>
+            body.includes(`${stage} skill Project ${stage}`),
+          ),
+          "The real skill tool must receive the refreshed body and includes",
+        );
+        const tools = requests.flatMap((body) =>
+          (
+            JSON.parse(body) as {
+              messages: { role: string; content: unknown }[];
+            }
+          ).messages.filter((message) => message.role === "tool"),
+        );
+        assert.ok(
+          tools.some((message) =>
+            JSON.stringify(message.content).includes("{{include:literal.md}}"),
+          ),
+          "Repeated reload must preserve the escaped marker without expanding it again",
+        );
+        terminalModelRequests += requests.length;
+        beforeTerminal = received.length;
+        assert.equal(await readFile(agentPath, "utf8"), expectedAgent);
+        assert.equal(
+          await readFile(join(project, ".opencode/commands/check.md"), "utf8"),
+          expectedCommand,
+        );
+        assert.equal(
+          await readFile(join(skillDirectory, "SKILL.md"), "utf8"),
+          expectedSkill,
+        );
+        assert.equal(
+          await readFile(
+            join(project, ".opencode/prompts/review/nested.txt"),
+            "utf8",
+          ),
+          expectedNested,
+        );
+        assert.equal(
+          await readFile(join(shared, "opencode.jsonc"), "utf8"),
+          expectedGlobal,
+        );
+        assert.equal(
+          await readFile(join(project, "opencode.jsonc"), "utf8"),
+          expectedProject,
+        );
+        assert.equal(await readFile(helperPath, "utf8"), helperText);
+        assert.equal(await readFile(obsoletePath, "utf8"), obsoleteText);
+      },
     });
     assert.equal(
       received.length,
       beforeTerminal,
       "TUI preview must not send a model prompt",
     );
+    assert.ok(
+      terminalModelRequests >= 4,
+      "Both reload paths must be followed by an actual agent and skill request",
+    );
+    // Restore a healthy loaded instance after characterizing a swallowed hook error.
+    await reload((current) =>
+      current.agent.review.prompt.includes("menu agent Project menu"),
+    );
+    assert.equal(await readFile(agentPath, "utf8"), expectedAgent);
   },
 );

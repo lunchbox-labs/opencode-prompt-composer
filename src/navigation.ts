@@ -4,23 +4,18 @@ import type {
 } from "@opencode-ai/plugin/tui";
 
 type Render = () => ReturnType<TuiPluginApi["ui"]["DialogAlert"]>;
-export type DialogDecoration = (
-  element: ReturnType<Render>,
-  close: () => void,
-) => ReturnType<Render>;
 const backValue = "\u0000back";
 
 /** Retain parent views while using V1's replacement-only dialog API. */
-export function dialogNavigation(
-  api: TuiPluginApi,
-  decoration?: DialogDecoration,
-) {
+export function dialogNavigation(api: TuiPluginApi) {
   let frames: Render[] = [];
   let revision = 0;
   let replacing = false;
+  let visible = false;
 
   const reset = () => {
     frames = [];
+    visible = false;
     revision++;
   };
   api.lifecycle.signal.addEventListener("abort", reset, { once: true });
@@ -63,6 +58,7 @@ export function dialogNavigation(
         if (replacing || active !== revision) {
           return;
         }
+        visible = false;
         frames.pop();
         const parent = frames.at(-1);
         const closed = ++revision;
@@ -90,6 +86,7 @@ export function dialogNavigation(
           }
         });
       });
+      visible = true;
     } finally {
       replacing = false;
     }
@@ -119,100 +116,70 @@ export function dialogNavigation(
       display(parent);
     }
   };
-  const decorate = (element: ReturnType<Render>) =>
-    decoration !== undefined ? decoration(element, close) : element;
   const select = (props: TuiDialogSelectProps<string>) => {
     let selected = props.current;
     return () => {
       const check = checkpoint();
-      return decorate(
-        api.ui.DialogSelect({
-          ...props,
-          get current() {
-            return selected;
-          },
-          get options() {
-            return frames.length > 1
-              ? [
-                  ...props.options,
-                  {
-                    title: "← Back",
-                    value: backValue,
-                    description: "Return to the previous view",
-                    category: "Navigation",
-                    footer: "esc",
-                  },
-                ]
-              : props.options;
-          },
-          onMove: (option) => {
-            if (!check()) {
-              return;
-            }
-            if (option.value !== backValue) {
-              selected = option.value;
-            }
-            props.onMove?.(option);
-          },
-          onSelect: (option) => {
-            if (!check()) {
-              return;
-            }
-            if (option.value === backValue) {
-              back();
-              return;
-            }
+      return api.ui.DialogSelect({
+        ...props,
+        get current() {
+          return selected;
+        },
+        get options() {
+          return frames.length > 1
+            ? [
+                ...props.options,
+                {
+                  title: "← Back",
+                  value: backValue,
+                  description: "Return to the previous view",
+                  category: "Navigation",
+                  footer: "esc",
+                },
+              ]
+            : props.options;
+        },
+        onMove: (option) => {
+          if (!check()) {
+            return;
+          }
+          if (option.value !== backValue) {
             selected = option.value;
-            return props.onSelect?.(option);
-          },
-        }),
-      );
+          }
+          props.onMove?.(option);
+        },
+        onSelect: (option) => {
+          if (!check()) {
+            return;
+          }
+          if (option.value === backValue) {
+            back();
+            return;
+          }
+          selected = option.value;
+          return props.onSelect?.(option);
+        },
+      });
     };
   };
   const menu = (props: TuiDialogSelectProps<string>, root = false) =>
     show(select(props), root);
   const alert = (props: Parameters<TuiPluginApi["ui"]["DialogAlert"]>[0]) =>
-    show(() => decorate(api.ui.DialogAlert(props)));
-  const confirm = (props: Parameters<TuiPluginApi["ui"]["DialogConfirm"]>[0]) =>
-    show(() => decorate(api.ui.DialogConfirm(props)));
-  const prompt = (props: Parameters<TuiPluginApi["ui"]["DialogPrompt"]>[0]) => {
-    let value = props.value;
-    show(() => {
-      const check = checkpoint();
-      return decorate(
-        api.ui.DialogPrompt({
-          ...props,
-          value,
-          onConfirm: (text) => {
-            if (!check()) {
-              return;
-            }
-            value = text;
-            return props.onConfirm?.(text);
-          },
-        }),
-      );
-    });
-  };
+    show(() => api.ui.DialogAlert(props));
   return {
     show,
     menu,
     select,
     alert,
-    prompt,
-    confirm,
     back,
-    refresh: () => {
-      const current = frames.at(-1);
-      if (current !== undefined) {
-        display(current);
-      }
-    },
     close,
     reset,
     checkpoint,
     get canGoBack() {
       return frames.length > 1;
+    },
+    get active() {
+      return visible && frames.length > 0 && !api.lifecycle.signal.aborted;
     },
   };
 }

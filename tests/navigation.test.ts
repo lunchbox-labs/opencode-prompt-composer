@@ -2,20 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type {
   TuiDialogAlertProps,
-  TuiDialogConfirmProps,
-  TuiDialogPromptProps,
   TuiDialogSelectProps,
   TuiPluginApi,
 } from "@opencode-ai/plugin/tui";
-import { type DialogDecoration, dialogNavigation } from "../src/navigation.ts";
+import { dialogNavigation } from "../src/navigation.ts";
 
-type Dialog =
-  | TuiDialogSelectProps<string>
-  | TuiDialogAlertProps
-  | TuiDialogConfirmProps
-  | TuiDialogPromptProps;
+type Dialog = TuiDialogSelectProps<string> | TuiDialogAlertProps;
 
-function harness(decoration?: DialogDecoration) {
+function harness() {
   let current: Dialog | undefined;
   let closed: (() => void) | undefined;
   const controller = new AbortController();
@@ -30,8 +24,6 @@ function harness(decoration?: DialogDecoration) {
     ui: {
       DialogSelect: render,
       DialogAlert: render,
-      DialogConfirm: render,
-      DialogPrompt: render,
       dialog: {
         get open() {
           return current !== undefined;
@@ -52,7 +44,7 @@ function harness(decoration?: DialogDecoration) {
   } as unknown as TuiPluginApi;
   return {
     api,
-    navigation: dialogNavigation(api, decoration),
+    navigation: dialogNavigation(api),
     controller,
     get current() {
       return current;
@@ -64,19 +56,14 @@ function harness(decoration?: DialogDecoration) {
   };
 }
 
-test("the close control clears every frame without restoring a parent", async () => {
-  let close: () => void = () =>
-    assert.fail("The close control was not rendered");
-  const view = harness((element, dismiss) => {
-    close = dismiss;
-    return element;
-  });
+test("closing navigation clears every frame without restoring a parent", async () => {
+  const view = harness();
   const nav = view.navigation;
   nav.menu({ title: "Workflow", options: [] }, true);
   nav.menu({ title: "Assignment", options: [] });
   nav.alert({ title: "Prompt", message: "Original assignment" });
   assert.equal(nav.canGoBack, true);
-  close();
+  nav.close();
   await Promise.resolve();
   assert.equal(view.current, undefined);
   assert.equal(nav.canGoBack, false);
@@ -115,57 +102,6 @@ test("nested menus offer Back and restore the parent's selection and live option
   await view.escape();
   assert.equal(view.current, undefined);
   assert.equal(nav.canGoBack, false);
-});
-
-test("Escape and native OK return through prompts and alerts without repeating actions", async () => {
-  const view = harness();
-  const nav = view.navigation;
-  let submitted = 0;
-  nav.menu({ title: "Root", options: [] }, true);
-  nav.prompt({
-    title: "Label",
-    value: "",
-    onConfirm: () => {
-      submitted++;
-      nav.alert({ title: "Preview", message: "Review" });
-    },
-  });
-  (view.current as TuiDialogPromptProps).onConfirm!("Remember this");
-  assert.equal(view.current?.title, "Preview");
-  (view.current as TuiDialogAlertProps).onConfirm?.();
-  await view.escape();
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Escape can replace or clear the captured dialog.
-  assert.equal(view.current?.title, "Label");
-  assert.equal((view.current as TuiDialogPromptProps).value, "Remember this");
-  await view.escape();
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Escape can replace or clear the captured dialog.
-  assert.equal(view.current?.title, "Root");
-  assert.equal(submitted, 1);
-});
-
-test("a deferred confirmation can replace navigation without the native clear erasing its result", async () => {
-  const view = harness();
-  const nav = view.navigation;
-  const deferred: Promise<void>[] = [];
-  nav.menu({ title: "Root", options: [] }, true);
-  nav.confirm({
-    title: "Save?",
-    message: "Review",
-    onConfirm: () => {
-      deferred.push(
-        Promise.resolve().then(() =>
-          nav.menu({ title: "Saved", options: [] }, true),
-        ),
-      );
-    },
-  });
-  (view.current as TuiDialogConfirmProps).onConfirm!();
-  await view.escape();
-  await Promise.all(deferred);
-  assert.equal(view.current?.title, "Saved");
-  assert.equal(nav.canGoBack, false);
-  await view.escape();
-  assert.equal(view.current, undefined);
 });
 
 test("closing a panel never resurrects parents after another dialog, route, client, or lifecycle takes over", async () => {
