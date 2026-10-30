@@ -1,5 +1,6 @@
 import type { Config, Hooks, Plugin, PluginModule } from "@opencode-ai/plugin";
 import { SettingsError } from "./errors.ts";
+import { notifyFailure } from "./notices.ts";
 import { compose } from "./runtime.ts";
 import { expandSkillBody } from "./skill-body.ts";
 import { startupSnippets } from "./startup-snippets.ts";
@@ -69,8 +70,8 @@ const PromptComposer: Plugin = (input, options = {}) => {
         applied: bodies(composed),
       });
     },
-    "tool.execute.after": async (input, output) => {
-      if (input.tool !== "skill") {
+    "tool.execute.after": async (call, output) => {
+      if (call.tool !== "skill") {
         return;
       }
       output.output = await expandSkillBody(
@@ -82,6 +83,7 @@ const PromptComposer: Plugin = (input, options = {}) => {
             "skill output (source file unavailable)",
           );
         },
+        (reason) => notifyFailure(input, reason),
       );
     },
   } satisfies Hooks);
