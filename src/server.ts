@@ -1,5 +1,6 @@
 import type { Config, Hooks, Plugin, PluginModule } from "@opencode-ai/plugin";
 import { SettingsError } from "./errors.ts";
+import { notifyFailure } from "./notices.ts";
 import { compose } from "./runtime.ts";
 import { expandSkillBody } from "./skill-body.ts";
 import { startupSnippets } from "./startup-snippets.ts";
@@ -56,7 +57,15 @@ const PromptComposer: Plugin = (input, options = {}) => {
           }
         }
       }
-      const composed = await compose(native, await startup);
+      let composed: Config;
+      try {
+        composed = await compose(native, await startup);
+      } catch (error) {
+        // The host logs and ignores this rejection; tell the user directly.
+        const reason = error instanceof Error ? error.message : String(error);
+        notifyFailure(input, `Prompt composition failed. ${reason}`);
+        throw error;
+      }
       // Publish only once the entire composition succeeds. Preserve all host metadata.
       if (composed.agent !== undefined) {
         config.agent = composed.agent;
