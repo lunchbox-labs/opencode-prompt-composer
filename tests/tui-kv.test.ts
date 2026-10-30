@@ -78,7 +78,7 @@ test("the built-in agent toggle is remembered through api.kv", async () => {
   };
   const values = async () => {
     const menu = await view("Loaded agent prompts");
-    return menu?.options?.map((item) => item.value) ?? [];
+    return menu.options?.map((item) => item.value) ?? [];
   };
   open();
   await view("View prompts");
