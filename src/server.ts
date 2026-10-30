@@ -78,8 +78,8 @@ const PromptComposer: Plugin = (input, options = {}) => {
         applied: bodies(composed),
       });
     },
-    "tool.execute.after": async (input, output) => {
-      if (input.tool !== "skill") {
+    "tool.execute.after": async (call, output) => {
+      if (call.tool !== "skill") {
         return;
       }
       output.output = await expandSkillBody(
@@ -91,6 +91,7 @@ const PromptComposer: Plugin = (input, options = {}) => {
             "skill output (source file unavailable)",
           );
         },
+        (reason) => notifyFailure(input, reason),
       );
     },
   } satisfies Hooks);
