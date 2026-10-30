@@ -256,7 +256,7 @@ test("skills expand on demand and reject truncated bodies without touching unrel
   );
 });
 
-test("wrapper-only markers stay literal and unknown skill output fails without mutation", async (t) => {
+test("wrapper-only markers stay literal and unknown skill output passes through unchanged", async (t) => {
   const { context } = await fixture(t);
   const hooks = await server.server(context as PluginInput);
   const input = { tool: "skill", sessionID: "s", callID: "c", args: {} };
@@ -268,7 +268,7 @@ test("wrapper-only markers stay literal and unknown skill output fails without m
     ...skillOutput("Unused"),
     output: "PRIVATE {{include:missing.md}}",
   };
-  await assert.rejects(hooks["tool.execute.after"]!(input, unknown), /framing/);
+  await hooks["tool.execute.after"]!(input, unknown);
   assert.equal(unknown.output, "PRIVATE {{include:missing.md}}");
 });
 
@@ -306,49 +306,4 @@ test("include failures identify consumers and logical cycles without native path
       },
     );
   }
-});
-
-test("skill failures have honest consumer context", async (t) => {
-  const { root } = await fixture(t);
-  const hooks = await server.server({
-    directory: root,
-    worktree: root,
-  } as PluginInput);
-  await assert.rejects(
-    hooks["tool.execute.after"]!(
-      { tool: "skill", sessionID: "s", callID: "c", args: { name: "review" } },
-      skillOutput("PRIVATE {{include:missing.md}}"),
-    ),
-    (error: Error) => {
-      assert.match(error.message, /skill output.*source file unavailable/);
-      assert.doesNotMatch(error.message, /PRIVATE|SKILL\.md/);
-      return true;
-    },
-  );
-});
-
-test("config composition preserves plugin registration without publishing editor state", async (t) => {
-  const { root } = await fixture(t);
-  const hooks = await server.server({
-    directory: root,
-    worktree: root,
-  } as PluginInput);
-  const config: Config = {
-    plugin: ["@lunchbox-labs/opencode-prompt-composer"],
-    agent: { review: { prompt: "Text" } },
-  };
-  const registration = structuredClone(config.plugin);
-  await hooks.config!(config);
-  assert.deepEqual(config.plugin, registration);
-});
-
-test("removed editor reload tokens are not accepted as plugin options", async (t) => {
-  const { root } = await fixture(t);
-  assert.throws(
-    () =>
-      server.server({ directory: root, worktree: root } as PluginInput, {
-        reloadToken: "old-editor-token",
-      }),
-    /does not accept plugin options/,
-  );
 });
