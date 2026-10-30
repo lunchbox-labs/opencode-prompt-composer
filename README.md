@@ -40,6 +40,12 @@ Run `/view-prompts`, choose Agents or Commands, then select a component to read 
 
 Prompt snippets are captured when the project loads. Restart the OpenCode server after editing snippets or native prompt definitions.
 
+## Includes and native `{file:}` references
+
+OpenCode substitutes `{file:path}` inside JSON configuration strings before plugins run. The path resolves relative to the configuration file or `~/`, the reference is not recursive, there is no escape, and a missing file fails configuration loading. Use it to load one whole prompt from a file.
+
+Includes work inside Markdown agent, command and skill bodies, expand recursively, resolve against the discovered `prompts/` directories, and accept the `\{{include:...}}` escape. A prompt loaded through `{file:}` can contain include markers; they expand normally because the plugin sees the substituted text.
+
 ## Documentation
 
 - [Usage](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Usage)
