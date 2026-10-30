@@ -25,13 +25,17 @@ test("review example authors its complete guidance in the original order", async
     (text, consumer) =>
       expandIncludes(text, inventory.files, undefined, consumer),
   );
-  assert.equal(
-    result.agent!.review!.prompt,
-    [
-      "Prioritize correctness, compatibility and maintainability. Read the relevant implementation before drawing conclusions.",
-      "Review the supplied diff and relevant surrounding code.\nFor each finding, identify the affected file, explain the observable failure and propose a focused correction. Include evidence and a reproduction when practical. If no actionable findings remain, say so.",
-      "Distinguish observed behavior from assumptions.",
-      "Prefer a short list of actionable findings.",
-    ].join("\n\n"),
+  const [context, findings] = await Promise.all(
+    ["context", "findings"].map((name) =>
+      readFile(resolve(root, `.opencode/prompts/review/${name}.md`), "utf8"),
+    ),
   );
+  // Keep the authored prose live while independently specifying both insertion
+  // sites. Comparing the complete body protects ordering and surrounding text.
+  assert.ok(body.includes("{{include:review/context.md}}"));
+  assert.ok(body.includes("{{include:review/findings.md}}"));
+  const expected = body
+    .replace("{{include:review/context.md}}", () => context.trim())
+    .replace("{{include:review/findings.md}}", () => findings.trim());
+  assert.equal(result.agent!.review!.prompt, expected);
 });
