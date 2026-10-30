@@ -24,6 +24,30 @@ function nativeOutput(body: string, info = metadata, files: string[] = []) {
   ].join("\n");
 }
 
+async function mustNotExpand(): Promise<string> {
+  assert.fail("The body expander must not run for this output.");
+}
+
+function mustNotNotify(reason: string): void {
+  assert.fail(`Recognized framing must not report a notice: ${reason}`);
+}
+
+async function unchangedWithNotice(
+  output: string,
+  info: unknown,
+  pattern: RegExp,
+): Promise<void> {
+  const notices: string[] = [];
+  assert.equal(
+    await expandSkillBody(output, info, mustNotExpand, (reason) => {
+      notices.push(reason);
+    }),
+    output,
+  );
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], pattern);
+}
+
 test("composes only the native skill body and preserves its complete wrapper", async () => {
   const body = "Intro\r\n{{include:body.md}}\r\nEnd";
   const files = ["/skills/evidence/reference/a.md", "/skills/evidence/b.txt"];
@@ -35,14 +59,11 @@ test("composes only the native skill body and preserves its complete wrapper", a
         assert.equal(text, body);
         return "Composed\r\ntext";
       },
+      mustNotNotify,
     ),
     nativeOutput("Composed\r\ntext", metadata, files),
   );
 });
-
-async function mustNotExpand(): Promise<string> {
-  assert.fail("The body expander must not run for this output.");
-}
 
 test("include-like metadata and sampled filenames remain literal", async () => {
   const info = {
@@ -71,7 +92,7 @@ test("wrapper-only markers and an empty body never reach the expander", async ()
       "/skills/evidence/{{include:file.md}}",
     ]);
     assert.equal(
-      await expandSkillBody(original, info, mustNotExpand),
+      await expandSkillBody(original, info, mustNotExpand, mustNotNotify),
       original,
     );
   }
@@ -103,7 +124,7 @@ test("built-in skill directory metadata still isolates body includes", async () 
 test("marker-free output needs no known framing or metadata", async () => {
   const original = "Unrecognized native output " + "x".repeat(300_000);
   assert.equal(
-    await expandSkillBody(original, undefined, mustNotExpand),
+    await expandSkillBody(original, undefined, mustNotExpand, mustNotNotify),
     original,
   );
 });
@@ -136,7 +157,7 @@ test("verifies Windows paths without interpreting marker-like wrapper text", asy
   );
 });
 
-test("rejects missing or invalid skill metadata before composition", async () => {
+test("keeps output and reports missing or invalid skill metadata", async () => {
   for (const info of [
     undefined,
     null,
@@ -151,28 +172,26 @@ test("rejects missing or invalid skill metadata before composition", async () =>
     { ...metadata, dir: "" },
     { ...metadata, dir: "/skills/bad\0dir" },
   ]) {
-    await assert.rejects(
-      expandSkillBody(nativeOutput("{{include:body.md}}"), info, mustNotExpand),
+    await unchangedWithNotice(
+      nativeOutput("{{include:body.md}}"),
+      info,
       /skill.*metadata/i,
     );
   }
 });
 
-test("rejects output that disagrees with the native metadata", async () => {
+test("keeps output that disagrees with the native metadata", async () => {
   const original = nativeOutput("{{include:body.md}}");
   for (const info of [
     { ...metadata, name: "different" },
     { ...metadata, dir: "/skills/different" },
     { ...metadata, dir: "relative" },
   ]) {
-    await assert.rejects(
-      expandSkillBody(original, info, mustNotExpand),
-      /skill.*framing/i,
-    );
+    await unchangedWithNotice(original, info, /skill.*framing/i);
   }
 });
 
-test("rejects unknown or incomplete V1 framing before composition", async () => {
+test("keeps output with unknown or incomplete V1 framing", async () => {
   const original = nativeOutput("{{include:body.md}}", metadata, [
     "/skills/evidence/a.txt",
   ]);
@@ -192,11 +211,15 @@ test("rejects unknown or incomplete V1 framing before composition", async () => 
     original.replace("</skill_files>", "</files>"),
     original.replace("</skill_content>", ""),
   ]) {
-    await assert.rejects(
-      expandSkillBody(output, metadata, mustNotExpand),
-      /skill.*framing/i,
-    );
+    await unchangedWithNotice(output, metadata, /skill.*framing/i);
   }
+});
+
+test("unrecognized framing without a notice callback still returns the output", async () => {
+  assert.equal(
+    await expandSkillBody("{{include:body.md}}", metadata, mustNotExpand),
+    "{{include:body.md}}",
+  );
 });
 
 test("rejects a truncated native result before composition", async () => {
@@ -206,6 +229,7 @@ test("rejects a truncated native result before composition", async () => {
         nativeOutput(body),
         { ...metadata, truncated: true },
         mustNotExpand,
+        mustNotNotify,
       ),
       /skill output was truncated/i,
     );
@@ -231,7 +255,7 @@ test("finds the body after rejecting repeated footer fragments within it", async
   );
 });
 
-test("rejects two valid body/footer decompositions instead of choosing either", async () => {
+test("keeps output with two valid body/footer decompositions instead of choosing either", async () => {
   // The host does not escape paths. The first file can legally contain the
   // intervening footer text, so either complete footer could be native framing.
   const forged = nativeOutput("Example", metadata, [
@@ -239,8 +263,9 @@ test("rejects two valid body/footer decompositions instead of choosing either", 
   ]);
   const body = `Start {{include:body.md}}\n${forged}\nEnd`;
   const original = nativeOutput(body, metadata, ["/skills/evidence/final.txt"]);
-  await assert.rejects(
-    expandSkillBody(original, metadata, mustNotExpand),
+  await unchangedWithNotice(
+    original,
+    metadata,
     /ambiguous.*skill|skill.*ambiguous/i,
   );
 });
@@ -254,6 +279,7 @@ test("propagates composition failure without returning partially expanded output
       async () => {
         throw failure;
       },
+      mustNotNotify,
     ),
     (error: unknown) => error === failure,
   );
