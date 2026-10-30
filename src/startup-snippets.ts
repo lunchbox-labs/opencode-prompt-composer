@@ -40,11 +40,10 @@ async function capture(
   const loaded = await Promise.all(
     entries.map(([reference, source]) => read(reference, source)),
   );
-  const captured = new Map<string, Captured>(
-    entries.map(
-      ([reference], index): [string, Captured] => [reference, loaded[index]],
-    ),
-  );
+  const captured = new Map<string, Captured>();
+  for (const [index, [reference]] of entries.entries()) {
+    captured.set(reference, loaded[index]);
+  }
   return (text, consumer) =>
     expandWithReader(
       text,
