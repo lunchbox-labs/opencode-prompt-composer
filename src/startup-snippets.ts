@@ -11,6 +11,7 @@ import {
   missingSnippet,
   readSnippet,
 } from "./include-core.ts";
+import { verifyInventory, verifyReads } from "./read-consistency.ts";
 
 type Expand = (text: string, consumer: string) => Promise<string>;
 type Captured = { source: PromptDependency } | { error: unknown };
@@ -35,15 +36,31 @@ async function capture(
   environment: NodeJS.ProcessEnv,
 ): Promise<Expand> {
   const inventory = await discoverPrompts(context, environment);
-  // Each read verifies its own file; independent files load concurrently.
+  // Bound open handles even for the largest supported prompt inventory.
   const entries = [...inventory.files];
-  const loaded = await Promise.all(
-    entries.map(([reference, source]) => read(reference, source)),
+  const loaded: Captured[] = [];
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(16, entries.length) }, async () => {
+      while (next < entries.length) {
+        const index = next++;
+        const [reference, source] = entries[index];
+        loaded[index] = await read(reference, source);
+      }
+    }),
   );
   const captured = new Map<string, Captured>();
+  const reads: PromptDependency[] = [];
   for (const [index, [reference]] of entries.entries()) {
-    captured.set(reference, loaded[index]);
+    const entry = loaded[index];
+    captured.set(reference, entry);
+    if ("source" in entry) {
+      reads.push(entry.source);
+    }
   }
+  // Detect edits to early reads and discovery changes before publishing.
+  await verifyReads(reads);
+  await verifyInventory(context, inventory, environment);
   return (text, consumer) =>
     expandWithReader(
       text,
