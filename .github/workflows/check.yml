@@ -3,14 +3,21 @@ on:
   pull_request:
   push:
     branches: [main]
+  # A manual run on a branch is the way to exercise the Windows lane before merging.
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: Check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   check:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Windows runs on every push to main; pull requests run Linux only, which keeps the
+        # slowest jobs off the review path.
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -19,51 +26,137 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        id: node
         with:
           node-version: '24'
           package-manager-cache: false
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
-      - run: npm run check
+      - name: Identify the runner image
+        id: image
+        shell: bash
+        # node-pty is compiled against the image's system libraries on Linux, so a cached
+        # install must stay within one runner image generation.
+        run: echo "os=${ImageOS:-$RUNNER_OS}" >> "$GITHUB_OUTPUT"
+      - name: Restore installed dependencies
+        id: dependencies
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules
+          # node-pty compiles from source on Linux, so the finished install restores far
+          # faster than npm's download cache plus a fresh npm ci.
+          key: node-modules-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json') }}
+      - name: Install dependencies
+        if: steps.dependencies.outputs.cache-hit != 'true'
+        run: npm ci
+      - name: Save installed dependencies
+        # Save before the checks so a failing run still seeds the cache for the next one.
+        if: steps.dependencies.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules
+          key: ${{ steps.dependencies.outputs.cache-primary-key }}
+      - name: Run the static checks
+        # Typecheck, lint and formatting are platform-independent; Linux covers them.
+        if: runner.os == 'Linux'
+        run: npm run check:static
+      - run: npm test
       - run: npm run test:package
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.scope.outputs.native }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          # The pull request merge commit and both of its parents, so the diff against
+          # the base branch needs no further fetch.
+          fetch-depth: 2
+      - name: Decide whether the changed files need the native matrix
+        id: scope
+        env:
+          PULL_REQUEST_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci-scope.mjs
   native:
+    needs: scope
+    # Pushes to main always run the matrix. When the scope job cannot say what changed,
+    # the matrix runs anyway and that failed job keeps the run red.
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.native == 'true') }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
         composition: [standalone, config-first]
         opencode: ["latest-compatible", "floor"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
       OPENCODE_TEST_VERSION: ${{ matrix.opencode }}
+      CONFIG_COMPOSER_REF: 34c4e8491cd33ff9f7952623882a98738c6e752d
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        id: node
         with:
           node-version: '24'
           package-manager-cache: false
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
+      - name: Identify the runner image
+        id: image
+        shell: bash
+        # node-pty is compiled against the image's system libraries on Linux, so a cached
+        # install must stay within one runner image generation.
+        run: echo "os=${ImageOS:-$RUNNER_OS}" >> "$GITHUB_OUTPUT"
+      - name: Restore installed dependencies
+        id: dependencies
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules
+          key: node-modules-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json') }}
+      - name: Install dependencies
+        if: steps.dependencies.outputs.cache-hit != 'true'
+        run: npm ci
+      - name: Save installed dependencies
+        if: steps.dependencies.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules
+          key: ${{ steps.dependencies.outputs.cache-primary-key }}
       - name: Check out config-only compatibility baseline
         if: matrix.composition != 'standalone'
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: lunchbox-labs/opencode-config-composer
-          ref: 34c4e8491cd33ff9f7952623882a98738c6e752d
+          ref: ${{ env.CONFIG_COMPOSER_REF }}
           path: compatibility/config-composer
           persist-credentials: false
-      - name: Build config-only package
+      - name: Restore the built config-only package
         if: matrix.composition != 'standalone'
+        id: baseline
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            compatibility/config-composer/node_modules
+            compatibility/config-composer/dist
+          # The baseline is a fixed commit, so its install and build only change with
+          # the runner platform and Node version.
+          key: config-composer-baseline-${{ env.CONFIG_COMPOSER_REF }}-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}
+      - name: Build config-only package
+        if: matrix.composition != 'standalone' && steps.baseline.outputs.cache-hit != 'true'
         working-directory: compatibility/config-composer
         run: |
           npm ci
           npm run build
+      - name: Save the built config-only package
+        if: matrix.composition != 'standalone' && steps.baseline.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            compatibility/config-composer/node_modules
+            compatibility/config-composer/dist
+          key: ${{ steps.baseline.outputs.cache-primary-key }}
       - name: Test standalone
         if: matrix.composition == 'standalone'
         run: npm run test:native

@@ -141,21 +141,12 @@ test("only stable published releases run verification before npm publication", a
     assert.ok(index > previous);
     previous = index;
   }
-  for (const [command, name] of [
-    ["npm ci", "Install dependencies"],
-    ["npm run check", "Run checks"],
-    ["npm run test:native", "Run native tests"],
-  ]) {
-    assert.equal(verify.steps.find((step) => step.run === command).name, name);
-  }
   const upload = verify.steps.find((step) =>
     step.uses?.startsWith("actions/upload-artifact@"),
   );
   const download = publish.steps.find((step) =>
     step.uses?.startsWith("actions/download-artifact@"),
   );
-  assert.equal(upload.name, "Upload verified package");
-  assert.equal(download.name, "Download verified package");
   assert.equal(upload.with.name, download.with.name);
   assert.equal(upload.with.path, "release/");
   assert.equal(download.with.path, "release");

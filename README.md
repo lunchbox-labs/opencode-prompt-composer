@@ -42,10 +42,12 @@ Prompt snippets are captured when the project loads. Restart the OpenCode server
 
 ## Documentation
 
-- [Usage](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Usage)
+- [Usage and native file references](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Usage)
 - [Discovery and overrides](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Discovery)
 - [Review guidance example](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Review-guidance)
 - [On-demand verification skill example](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/On-demand-verification)
 - [Downloads](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Downloads)
 
 Runnable projects are in [docs/examples](docs/examples/).
+
+Contributor and maintainer guidance is in the [Developer wiki](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Developer).

@@ -1,7 +1,24 @@
-import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui";
+import type {
+  TuiPlugin,
+  TuiPluginApi,
+  TuiPluginModule,
+} from "@opencode-ai/plugin/tui";
 import { createFixedMenu } from "./fixed-menu.ts";
 import { dialogNavigation } from "./navigation.ts";
 import { previewPages } from "./preview.ts";
+
+const builtinsKey = "prompt-composer.showBuiltins";
+
+function storedBuiltins(api: TuiPluginApi): boolean {
+  // Headless test doubles may omit the host store.
+  const kv = api.kv as TuiPluginApi["kv"] | undefined;
+  return kv?.get(builtinsKey) === true;
+}
+
+function storeBuiltins(api: TuiPluginApi, value: boolean): void {
+  const kv = api.kv as TuiPluginApi["kv"] | undefined;
+  kv?.set(builtinsKey, value);
+}
 
 const PromptComposerTui: TuiPlugin = async (api) => {
   const fixedMenu = await createFixedMenu(api);
@@ -86,7 +103,7 @@ const PromptComposerTui: TuiPlugin = async (api) => {
           builtin,
         };
       });
-      let showBuiltins = false;
+      let showBuiltins = storedBuiltins(api);
       const menu = (
         title: string,
         options: { title: string; value: string }[],
@@ -166,6 +183,7 @@ const PromptComposerTui: TuiPlugin = async (api) => {
           onSelect: ({ value }) => {
             if (value === "\u0000builtins") {
               showBuiltins = !showBuiltins;
+              storeBuiltins(api, showBuiltins);
               navigation.refresh();
               return;
             }
