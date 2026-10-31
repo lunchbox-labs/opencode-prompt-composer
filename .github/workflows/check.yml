@@ -13,7 +13,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Windows runs on every push to main; pull requests run Linux only, which keeps the
+        # slowest jobs off the review path.
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -50,7 +52,11 @@ jobs:
         with:
           path: node_modules
           key: ${{ steps.dependencies.outputs.cache-primary-key }}
-      - run: npm run check
+      - name: Run the static checks
+        # Typecheck, lint and formatting are platform-independent; Linux covers them.
+        if: runner.os == 'Linux'
+        run: npm run check:static
+      - run: npm test
       - run: npm run test:package
   scope:
     runs-on: ubuntu-latest
@@ -77,7 +83,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
         composition: [standalone, config-first]
         opencode: ["latest-compatible", "floor"]
     runs-on: ${{ matrix.os }}
