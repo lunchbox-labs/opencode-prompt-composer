@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import {
+import fs, {
   chmod,
   mkdir,
   mkdtemp,
@@ -10,6 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
@@ -283,6 +284,88 @@ test(
     await assert.rejects(
       next["tool.execute.after"]!(skillInput, skill("{{include:body.md}}")),
       /escapes/,
+    );
+  },
+);
+
+for (const mutation of ["edit", "add"] as const) {
+  test(`startup rejects a snippet ${mutation} during capture before publishing config`, async (t) => {
+    const f = await fixture(t);
+    const body = join(f.directory, "body.md");
+    await writeFile(body, "Startup");
+    const canonicalBody = await fs.realpath(body);
+    const open = fs.open;
+    let changed = false;
+    t.mock.method(fs, "open", async (...args: Parameters<typeof open>) => {
+      const file = await open(...args);
+      if (args[0] === canonicalBody) {
+        const close = file.close.bind(file);
+        t.mock.method(file, "close", async () => {
+          await close();
+          if (!changed) {
+            changed = true;
+            await writeFile(
+              mutation === "edit" ? body : join(f.directory, "new.md"),
+              "Changed",
+            );
+          }
+        });
+      }
+      return file;
+    });
+    syncBuiltinESMExports();
+    t.after(() => {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    });
+    const hooks = await server.server(f.context);
+    const current = config();
+    const before = structuredClone(current);
+    await assert.rejects(hooks.config!(current), /changed/i);
+    assert.deepEqual(current, before);
+  });
+}
+
+test(
+  "startup captures every valid snippet under a bounded descriptor limit",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const f = await fixture(t);
+    for (let index = 0; index < 800; index++) {
+      await writeFile(join(f.directory, `${index}.md`), `Snippet ${index}`);
+    }
+    const script = `import assert from 'node:assert/strict';
+import server from ${JSON.stringify(new URL("../src/server.ts", import.meta.url).href)};
+const hooks = await server.server({ directory: process.argv[1], worktree: process.argv[1] });
+await hooks.config({});
+for (let index = 0; index < 800; index++) {
+  const config = { command: { check: { template: '{{include:' + index + '.md}}' } } };
+  await hooks.config(config);
+  assert.equal(config.command.check.template, 'Snippet ' + index);
+}`;
+    await promisify(execFile)(
+      "bash",
+      [
+        "-c",
+        'set -e\nulimit -n 128\nexec "$@"',
+        "startup-capture",
+        process.execPath,
+        "--experimental-strip-types",
+        "--input-type=module",
+        "-e",
+        script,
+        f.root,
+      ],
+      {
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          XDG_CONFIG_HOME: join(f.root, "config"),
+          OPENCODE_TEST_HOME: f.root,
+          OPENCODE_CONFIG_DIR: "",
+          OPENCODE_DISABLE_PROJECT_CONFIG: "false",
+        },
+      },
     );
   },
 );
