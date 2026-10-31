@@ -1,20 +1,20 @@
 import { SettingsError } from "./errors.ts";
 
 const END = "\n</skill_files>\n</skill_content>";
+const UNKNOWN_FRAMING =
+  "The skill output has unknown or incomplete framing. Its includes were not expanded.";
 
-function invalidFraming(): never {
-  throw new SettingsError(
-    "The skill output has unknown or incomplete framing. Its body cannot be composed safely.",
-  );
-}
+export type SkillNotice = (reason: string) => void;
 
 // OpenCode's V1 skill tool (1.19.0 and 1.19.3) supplies name/dir metadata,
 // but no structured body. Match its complete framing without rereading a
-// possibly changed, cached, or built-in SKILL.md.
+// possibly changed, cached, or built-in SKILL.md. Unrecognized framing keeps
+// the native output and reports why, so the skill itself still loads.
 export async function expandSkillBody(
   output: string,
   metadata: unknown,
   expand: (body: string) => Promise<string>,
+  notify?: SkillNotice,
 ): Promise<string> {
   if (
     typeof metadata === "object" &&
@@ -29,6 +29,10 @@ export async function expandSkillBody(
   if (!output.includes("{{include:")) {
     return output;
   }
+  const unchanged = (reason: string): string => {
+    notify?.(reason);
+    return output;
+  };
   if (
     typeof metadata !== "object" ||
     metadata === null ||
@@ -41,8 +45,8 @@ export async function expandSkillBody(
     metadata.dir.length === 0 ||
     metadata.dir.includes("\0")
   ) {
-    throw new SettingsError(
-      "The skill output is missing valid native name/dir metadata. Its body cannot be composed safely.",
+    return unchanged(
+      "The skill output is missing valid native name/dir metadata. Its includes were not expanded.",
     );
   }
   const prefix = `<skill_content name="${metadata.name}">\n# Skill: ${metadata.name}\n\n`;
@@ -58,7 +62,7 @@ export async function expandSkillBody(
     "<skill_files>\n",
   ].join("\n");
   if (!output.startsWith(prefix) || !output.endsWith(END)) {
-    invalidFraming();
+    return unchanged(UNKNOWN_FRAMING);
   }
   let boundary: number | undefined;
   const filesEnd = output.length - END.length;
@@ -82,14 +86,14 @@ export async function expandSkillBody(
       continue;
     }
     if (boundary !== undefined) {
-      throw new SettingsError(
-        "The skill output has ambiguous body framing. Its body cannot be composed safely.",
+      return unchanged(
+        "The skill output has ambiguous body framing. Its includes were not expanded.",
       );
     }
     boundary = candidate;
   }
   if (boundary === undefined) {
-    invalidFraming();
+    return unchanged(UNKNOWN_FRAMING);
   }
   const body = output.slice(prefix.length, boundary);
   if (!body.includes("{{include:")) {
