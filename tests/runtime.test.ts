@@ -307,3 +307,144 @@ test("include failures identify consumers and logical cycles without native path
     );
   }
 });
+
+test("skill failures have honest consumer context", async (t) => {
+  const { root } = await fixture(t);
+  const hooks = await server.server({
+    directory: root,
+    worktree: root,
+  } as PluginInput);
+  const output = skillOutput("PRIVATE {{include:missing.md}}");
+  const before = structuredClone(output);
+  await assert.rejects(
+    hooks["tool.execute.after"]!(
+      { tool: "skill", sessionID: "s", callID: "c", args: { name: "review" } },
+      output,
+    ),
+    (error: Error) => {
+      assert.match(error.message, /skill output.*source file unavailable/);
+      assert.doesNotMatch(error.message, /PRIVATE|SKILL\.md/);
+      return true;
+    },
+  );
+  assert.deepEqual(output, before);
+});
+
+test("skill composition failure after a valid include leaves the entire result unchanged", async (t) => {
+  const { root, context } = await fixture(t);
+  await writeFile(join(root, ".opencode/prompts/body.md"), "Expanded first");
+  const hooks = await server.server(context as PluginInput);
+  const output = skillOutput("{{include:body.md}} then {{include:missing.md}}");
+  const before = structuredClone(output);
+  await assert.rejects(
+    hooks["tool.execute.after"]!(
+      { tool: "skill", sessionID: "s", callID: "c", args: {} },
+      output,
+    ),
+    /does not exist/,
+  );
+  assert.deepEqual(output, before);
+});
+
+test("truncated skill results reject without mutation even when framing is unknown", async (t) => {
+  const { context } = await fixture(t);
+  const hooks = await server.server(context as PluginInput);
+  for (const text of ["PRIVATE {{include:missing.md}}", "ordinary output"]) {
+    const output = {
+      ...skillOutput("Unused"),
+      metadata: { truncated: true },
+      output: text,
+    };
+    const before = structuredClone(output);
+    await assert.rejects(
+      hooks["tool.execute.after"]!(
+        { tool: "skill", sessionID: "s", callID: "c", args: {} },
+        output,
+      ),
+      /truncated/,
+    );
+    assert.deepEqual(output, before);
+  }
+});
+
+test("unknown skill framing warns without exposing the native output", async (t) => {
+  const { context } = await fixture(t);
+  const notices: {
+    body: { title: string; message: string; variant: string };
+  }[] = [];
+  const hooks = await server.server({
+    ...context,
+    client: {
+      tui: {
+        showToast: async (notice: (typeof notices)[number]) => {
+          notices.push(notice);
+        },
+      },
+    },
+  } as unknown as PluginInput);
+  const output = {
+    ...skillOutput("Unused"),
+    output: "PRIVATE {{include:missing.md}}",
+  };
+  const before = structuredClone(output);
+  await hooks["tool.execute.after"]!(
+    { tool: "skill", sessionID: "s", callID: "c", args: {} },
+    output,
+  );
+  assert.deepEqual(output, before);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].body.title, "Prompt Composer");
+  assert.match(notices[0].body.message, /framing.*includes were not expanded/);
+  assert.doesNotMatch(notices[0].body.message, /PRIVATE|missing\.md/);
+});
+
+test("toast failures cannot prevent unknown skill output from passing through", async (t) => {
+  const { context } = await fixture(t);
+  for (const showToast of [
+    () => {
+      throw new Error("Toast unavailable");
+    },
+    () => Promise.reject(new Error("Toast unavailable")),
+  ]) {
+    const hooks = await server.server({
+      ...context,
+      client: { tui: { showToast } },
+    } as unknown as PluginInput);
+    const output = {
+      ...skillOutput("Unused"),
+      output: "PRIVATE {{include:missing.md}}",
+    };
+    const before = structuredClone(output);
+    await hooks["tool.execute.after"]!(
+      { tool: "skill", sessionID: "s", callID: "c", args: {} },
+      output,
+    );
+    assert.deepEqual(output, before);
+  }
+});
+
+test("config composition preserves plugin registration without publishing editor state", async (t) => {
+  const { root } = await fixture(t);
+  const hooks = await server.server({
+    directory: root,
+    worktree: root,
+  } as PluginInput);
+  const config: Config = {
+    plugin: ["@lunchbox-labs/opencode-prompt-composer"],
+    agent: { review: { prompt: "Text" } },
+  };
+  const registration = structuredClone(config.plugin);
+  await hooks.config!(config);
+  assert.deepEqual(config.plugin, registration);
+});
+
+test("removed editor reload tokens are not accepted as plugin options", async (t) => {
+  const { root } = await fixture(t);
+  assert.throws(
+    () =>
+      server.server({ directory: root, worktree: root } as PluginInput, {
+        reloadToken: "old-editor-token",
+      }),
+    /does not accept plugin options/,
+  );
+});

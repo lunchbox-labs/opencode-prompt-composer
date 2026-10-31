@@ -10,12 +10,16 @@ export function notifyFailure(input: PluginInput, message: string): void {
   if (tui === undefined) {
     return;
   }
-  const shown = tui.showToast({
-    body: {
-      title: "Prompt Composer",
-      message: message.length > 600 ? `${message.slice(0, 599)}…` : message,
-      variant: "error",
-    },
-  });
-  shown.catch(() => undefined);
+  try {
+    const shown = tui.showToast({
+      body: {
+        title: "Prompt Composer",
+        message: message.length > 600 ? `${message.slice(0, 599)}…` : message,
+        variant: "error",
+      },
+    });
+    shown.catch(() => undefined);
+  } catch {
+    // Notifications are best-effort, including hosts that throw before returning.
+  }
 }
