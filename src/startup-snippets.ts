@@ -11,7 +11,11 @@ import {
   missingSnippet,
   readSnippet,
 } from "./include-core.ts";
-import { verifyInventory, verifyReads } from "./read-consistency.ts";
+import {
+  mapBounded,
+  verifyInventory,
+  verifyReads,
+} from "./read-consistency.ts";
 
 type Expand = (text: string, consumer: string) => Promise<string>;
 type Captured = { source: PromptDependency } | { error: unknown };
@@ -36,18 +40,9 @@ async function capture(
   environment: NodeJS.ProcessEnv,
 ): Promise<Expand> {
   const inventory = await discoverPrompts(context, environment);
-  // Bound open handles even for the largest supported prompt inventory.
   const entries = [...inventory.files];
-  const loaded: Captured[] = [];
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(16, entries.length) }, async () => {
-      while (next < entries.length) {
-        const index = next++;
-        const [reference, source] = entries[index];
-        loaded[index] = await read(reference, source);
-      }
-    }),
+  const loaded = await mapBounded(entries, ([reference, source]) =>
+    read(reference, source),
   );
   const captured = new Map<string, Captured>();
   const reads: PromptDependency[] = [];

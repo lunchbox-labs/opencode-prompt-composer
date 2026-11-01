@@ -111,3 +111,29 @@ test("final reads accept the source byte limit and reject growth beyond it", asy
     /Prompt sources must be regular files within the size limit\./,
   );
 });
+
+test("final reads report the first changed source in input order", async (t) => {
+  const f = await fixture(t);
+  const names = Array.from({ length: 40 }, (_, index) => `${index}.md`);
+  for (const name of names) {
+    await writeFile(join(f.root, ".opencode/prompts", name), "Original");
+  }
+  const reads: PromptDependency[] = [];
+  await expandIncludes(
+    names.map((name) => `{{include:${name}}}`).join(" "),
+    (await discoverPrompts(f.context)).files,
+    (source) => reads.push(source),
+  );
+  // Later deletions fail faster than the earlier same-size edit is detected.
+  await writeFile(join(f.root, ".opencode/prompts/3.md"), "Modified");
+  for (const name of names.slice(4)) {
+    await rm(join(f.root, ".opencode/prompts", name));
+  }
+  await assert.rejects(verifyReads(reads), (error: Error) => {
+    assert.equal(
+      error.message,
+      `Prompt input changed: ${join(f.root, ".opencode/prompts/3.md")}. Retry composition.`,
+    );
+    return true;
+  });
+});
