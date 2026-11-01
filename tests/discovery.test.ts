@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import fs, { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -116,4 +117,106 @@ test("preserves nested relative names, ignores unsupported/hidden files, rejects
     discoverPrompts({ directory: f.nested, worktree: f.project }, f.env),
     /escapes/,
   );
+});
+
+test("reports the first failing entry in sorted order", async (t) => {
+  const f = await fixture(t);
+  const prompts = join(f.global, "prompts");
+  await writeFile(join(f.root, "secret.md"), "secret");
+  try {
+    await symlink(join(f.root, "secret.md"), join(prompts, "z.md"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") {
+      t.skip("Symlink privilege unavailable");
+      return;
+    }
+    throw error;
+  }
+  const discover = () =>
+    discoverPrompts({ directory: f.nested, worktree: f.project }, f.env);
+  await mkdir(join(prompts, "a"));
+  await symlink(join(prompts, "a"), join(prompts, "a/loop"));
+  await assert.rejects(discover(), /cycle or depth limit/);
+  await rm(join(prompts, "a/loop"));
+  await mkdir(join(prompts, ".private"));
+  await writeFile(join(prompts, ".private/body.md"), "Private");
+  await symlink(join(prompts, ".private/body.md"), join(prompts, "a/body.md"));
+  await assert.rejects(discover(), /hidden path/);
+  await rm(join(prompts, "a"), { recursive: true });
+  await assert.rejects(discover(), /escapes/);
+});
+
+test("allows exactly 4096 entries and reports the limit before later failures", async (t) => {
+  const f = await fixture(t);
+  const empty = join(f.root, "empty");
+  const prompts = join(f.root, "limit/prompts");
+  const many = join(prompts, "many");
+  await mkdir(many, { recursive: true });
+  const env = {
+    XDG_CONFIG_HOME: join(f.root, "unused"),
+    OPENCODE_TEST_HOME: empty,
+    OPENCODE_CONFIG_DIR: join(f.root, "limit"),
+    OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+  };
+  const discover = () =>
+    discoverPrompts({ directory: empty, worktree: empty }, env);
+  const name = (index: number) => `${String(index).padStart(4, "0")}.md`;
+  // The directory itself is the first entry.
+  for (let start = 0; start < 4095; start += 512) {
+    await Promise.all(
+      Array.from({ length: Math.min(512, 4095 - start) }, (_, offset) =>
+        writeFile(join(many, name(start + offset)), "Snippet"),
+      ),
+    );
+  }
+  const result = await discover();
+  assert.equal(result.files.size, 4095);
+  assert.equal(result.files.has("many/4094.md"), true);
+  await writeFile(join(many, name(4095)), "Snippet");
+  await assert.rejects(discover(), /exceeds 4096 entries/);
+  await rm(join(many, name(4095)));
+  await writeFile(join(f.root, "secret.md"), "secret");
+  try {
+    await symlink(join(f.root, "secret.md"), join(prompts, "z.md"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") {
+      t.skip("Symlink privilege unavailable");
+      return;
+    }
+    throw error;
+  }
+  await assert.rejects(discover(), /exceeds 4096 entries/);
+});
+
+test("discovery keeps a bounded number of path lookups in flight", async (t) => {
+  const f = await fixture(t);
+  const prompts = join(f.global, "prompts");
+  for (let index = 0; index < 100; index++) {
+    await mkdir(join(prompts, `area-${index % 4}`), { recursive: true });
+    await writeFile(join(prompts, `area-${index % 4}`, `${index}.md`), "Text");
+  }
+  let active = 0;
+  let peak = 0;
+  for (const name of ["realpath", "stat"] as const) {
+    const original = fs[name] as (...args: unknown[]) => Promise<unknown>;
+    t.mock.method(fs, name, async (...args: unknown[]) => {
+      peak = Math.max(peak, ++active);
+      try {
+        return await original(...args);
+      } finally {
+        active--;
+      }
+    });
+  }
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  const result = await discoverPrompts(
+    { directory: f.nested, worktree: f.project },
+    f.env,
+  );
+  assert.equal(result.files.has("area-3/99.md"), true);
+  assert.ok(peak <= 16, `${peak} path lookups were in flight`);
 });
