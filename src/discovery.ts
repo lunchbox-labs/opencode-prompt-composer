@@ -151,8 +151,12 @@ export async function discoverPrompts(
       }
       const info = await stat(canonical);
       if (!info.isDirectory()) {
+        // A child was a directory when looked up, so for a child this means
+        // the tree changed during discovery rather than a configuration error.
         throw new SettingsError(
-          `Prompt discovery expects a directory: ${path}.`,
+          parents.size === 0
+            ? `Prompt discovery expects a directory: ${path}.`
+            : `Prompt discovery changed: ${path}. Retry composition.`,
         );
       }
       const names = (await readdir(path))
