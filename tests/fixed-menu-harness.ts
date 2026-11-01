@@ -1,7 +1,9 @@
+import { EventEmitter } from "node:events";
 import { registerHooks } from "node:module";
 import type { TuiDialogSelectProps } from "@opencode-ai/plugin/tui";
 import {
   BoxRenderable,
+  ScrollBoxRenderable,
   SelectRenderable,
   TextRenderable,
 } from "./fixed-menu-runtime.ts";
@@ -10,7 +12,7 @@ registerHooks({
   resolve(specifier, context, nextResolve) {
     if (
       specifier === "@opentui/core" &&
-      /\/fixed-menu\.(?:ts|js)$/.test(context.parentURL ?? "")
+      /\/(?:fixed-menu|text-viewer)\.(?:ts|js)$/.test(context.parentURL ?? "")
     ) {
       return {
         url: new URL("./fixed-menu-runtime.ts", import.meta.url).href,
@@ -22,7 +24,7 @@ registerHooks({
 });
 
 export const fixedMenuApi = {
-  renderer: {},
+  renderer: Object.assign(new EventEmitter(), { height: 40 }),
   theme: {
     current: {
       primary: "#abcdef",
@@ -70,6 +72,31 @@ export function fixedMenuView(
       select.selectCurrent();
     },
   };
+}
+
+/** The title and complete text shown by a scrollable text viewer. */
+export function textViewerView(
+  element: unknown,
+): { title: string; message: string } | undefined {
+  if (!(element instanceof BoxRenderable)) {
+    return;
+  }
+  const children = element.getChildren();
+  const scroll = children.find((child) => child instanceof ScrollBoxRenderable);
+  if (scroll === undefined) {
+    return;
+  }
+  const title = children.find((child) => child instanceof TextRenderable);
+  const text = scroll.getChildren()[0]?.getChildren()[0];
+  if (title === undefined || !(text instanceof TextRenderable)) {
+    throw new Error("Text viewer is missing its title or text");
+  }
+  return { title: title.plainText, message: text.plainText };
+}
+
+/** Plugin-rendered dialogs in the shape tests read from native dialogs. */
+export function dialogView(element: unknown) {
+  return textViewerView(element) ?? fixedMenuView(element);
 }
 
 export function destroyFixedMenu(element: unknown) {

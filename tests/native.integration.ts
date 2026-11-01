@@ -20,7 +20,7 @@ import {
   exercisePromptViewer,
 } from "./native-editors.ts";
 import { resolveNativeVersion, verifyNativeVersion } from "./native-host.ts";
-import { exerciseNativeTerminal } from "./native-terminal.ts";
+import { exerciseNativeTerminal, viewerCommands } from "./native-terminal.ts";
 import { prepareRipgrep } from "./native-ripgrep.ts";
 
 const execute = promisify(execFile);
@@ -784,6 +784,9 @@ test(
     );
     await writeFile(agentPath, agentText);
     await writeFile(personalPath, "  Personal review guidance.\n");
+    for (const [name, text] of Object.entries(viewerCommands)) {
+      await writeFile(join(project, ".opencode/commands", name), text);
+    }
     const restartedSkillText = changedSkillText.replace(
       "{{include:review/deleted.txt}}\n",
       "",

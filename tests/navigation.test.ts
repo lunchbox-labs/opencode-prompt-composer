@@ -12,6 +12,7 @@ type Dialog = TuiDialogSelectProps<string> | TuiDialogAlertProps;
 function harness() {
   let current: Dialog | undefined;
   let closed: (() => void) | undefined;
+  let size = "medium";
   const controller = new AbortController();
   const render = (props: Dialog) => {
     current = props;
@@ -31,13 +32,18 @@ function harness() {
         replace: (next: () => void, onClose?: () => void) => {
           closed?.();
           closed = onClose;
+          size = "medium";
           next();
         },
         // V1 invokes onClose before removing the current dialog.
         clear: () => {
           closed?.();
           closed = undefined;
+          size = "medium";
           current = undefined;
+        },
+        setSize: (next: string) => {
+          size = next;
         },
       },
     },
@@ -48,6 +54,12 @@ function harness() {
     controller,
     get current() {
       return current;
+    },
+    get size() {
+      return size;
+    },
+    alert(props: TuiDialogAlertProps) {
+      return () => api.ui.DialogAlert(props);
     },
     async escape() {
       api.ui.dialog.clear();
@@ -61,7 +73,7 @@ test("closing navigation clears every frame without restoring a parent", async (
   const nav = view.navigation;
   nav.menu({ title: "Workflow", options: [] }, true);
   nav.menu({ title: "Assignment", options: [] });
-  nav.alert({ title: "Prompt", message: "Original assignment" });
+  nav.show(view.alert({ title: "Prompt", message: "Original assignment" }));
   assert.equal(nav.canGoBack, true);
   nav.close();
   await Promise.resolve();
@@ -117,7 +129,7 @@ test("closing a panel never resurrects parents after another dialog, route, clie
     const view = harness();
     const nav = view.navigation;
     nav.menu({ title: "Root", options: [] }, true);
-    nav.alert({ title: "Child", message: "Details" });
+    nav.show(view.alert({ title: "Child", message: "Details" }));
     view.api.ui.dialog.clear();
     if (change === "dialog") {
       view.api.ui.dialog.replace(() =>
@@ -161,7 +173,7 @@ test("retired picker callbacks cannot act after Back, Escape or connection repla
     onMove: () => moved++,
     onSelect: () => {
       selected++;
-      nav.alert({ title: "Details", message: "File" });
+      nav.show(view.alert({ title: "Details", message: "File" }));
     },
   });
   const retired = view.current as TuiDialogSelectProps<string>;
@@ -195,4 +207,23 @@ test("retired picker callbacks cannot act after Back, Escape or connection repla
   Object.assign(view.api, { client: {} });
   disconnected.onSelect!(disconnected.options[0]);
   assert.equal(selected, 2);
+});
+
+test("wide frames reapply their size whenever navigation displays them", async () => {
+  const view = harness();
+  const nav = view.navigation;
+  // Read live dialog state; assertions would otherwise narrow these getters.
+  const shown = () => [view.current?.title, view.size];
+  nav.menu({ title: "Root", options: [] }, true);
+  assert.deepEqual(shown(), ["Root", "medium"]);
+  nav.show(view.alert({ title: "Viewer", message: "Text" }), false, "xlarge");
+  assert.deepEqual(shown(), ["Viewer", "xlarge"]);
+  nav.show(view.alert({ title: "Details", message: "Child" }));
+  assert.deepEqual(shown(), ["Details", "medium"]);
+  await view.escape();
+  assert.deepEqual(shown(), ["Viewer", "xlarge"]);
+  nav.refresh();
+  assert.deepEqual(shown(), ["Viewer", "xlarge"]);
+  await view.escape();
+  assert.deepEqual(shown(), ["Root", "medium"]);
 });

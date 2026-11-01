@@ -1,22 +1,51 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import {
+  VIEW_CHARACTERS,
+  VIEW_LINE_CHARACTERS,
+  previewParts,
+} from "../src/preview.ts";
 
-test("page boundaries retain empty text, long lines, CRLF and trailing newlines", async () => {
-  const { previewPages } = await import("../src/preview.ts");
+test("text within the view limits opens as one complete view", () => {
+  const prompt = "Use evidence 🙂 and state uncertainty.\r\n".repeat(600);
+  assert.ok(prompt.length > 20_000);
   for (const text of [
+    prompt,
     "",
-    "x".repeat(240),
-    "x".repeat(241),
-    "\r\n".repeat(60),
-    `${"🙂".repeat(239)}$ARGUMENTS\\{{include:literal.md}}\n`,
+    "x".repeat(VIEW_LINE_CHARACTERS),
+    `${"x".repeat(VIEW_LINE_CHARACTERS)}\nrest`,
+    `${"x".repeat(VIEW_LINE_CHARACTERS - 1)}\r\nrest`,
+    `${"🙂\n".repeat(VIEW_CHARACTERS / 2 - 1)}🙂🙂`,
   ]) {
-    const pages = previewPages(text);
-    assert.ok(pages.length >= 1);
-    assert.equal(pages.join(""), text);
-    for (const page of pages) {
-      assert.ok(Array.from(page).length <= 240);
-      assert.ok(page.split("\n").length <= 7);
-      assert.equal(page.isWellFormed(), true);
+    assert.deepEqual(previewParts(text), [text]);
+  }
+});
+
+test("oversized text splits into bounded views at line breaks without losing characters", () => {
+  const line = "Use evidence 🙂 and state uncertainty.\r\n";
+  for (const text of [
+    "x".repeat(VIEW_LINE_CHARACTERS + 1),
+    `${"🙂".repeat(3 * VIEW_LINE_CHARACTERS)}\n`,
+    line.repeat(Math.ceil((3 * VIEW_CHARACTERS) / line.length)),
+    "\n".repeat(VIEW_CHARACTERS + 1),
+    `${"$ARGUMENTS \\{{include:literal.md}}\n".repeat(4000)}${"界".repeat(2 * VIEW_LINE_CHARACTERS)}\n tail`,
+  ]) {
+    const parts = previewParts(text);
+    assert.equal(parts.join(""), text);
+    for (const [index, part] of parts.entries()) {
+      assert.notEqual(part, "");
+      assert.ok(Array.from(part).length <= VIEW_CHARACTERS);
+      assert.equal(part.isWellFormed(), true);
+      for (const segment of part.split("\n")) {
+        assert.ok(Array.from(segment).length <= VIEW_LINE_CHARACTERS);
+      }
+      // Only a line longer than one view allows can end a view mid-line.
+      if (index < parts.length - 1 && !part.endsWith("\n")) {
+        assert.equal(
+          Array.from(part.slice(part.lastIndexOf("\n") + 1)).length,
+          VIEW_LINE_CHARACTERS,
+        );
+      }
     }
   }
 });

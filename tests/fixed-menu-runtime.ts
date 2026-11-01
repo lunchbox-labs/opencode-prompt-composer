@@ -4,6 +4,7 @@ interface Options {
   content?: string;
   options?: { name: string; description: string; value: string }[];
   selectedIndex?: number;
+  height?: number;
 }
 
 // Flow tests need the component tree and events; the native PTY tests cover FFI.
@@ -11,9 +12,13 @@ export class BoxRenderable extends EventEmitter {
   readonly children: BoxRenderable[] = [];
   readonly config: Options;
   isDestroyed = false;
+  // Tests assign laid-out heights and call onSizeChange where OpenTUI's layout would.
+  height: number;
+  onSizeChange?: () => void;
   constructor(_renderer: unknown, config: Options) {
     super();
     this.config = config;
+    this.height = config.height ?? 0;
   }
   add(child: BoxRenderable) {
     this.children.push(child);
@@ -52,6 +57,10 @@ export class SelectRenderable extends BoxRenderable {
   selectCurrent() {
     this.emit("itemSelected", this.selected, this.options[this.selected]);
   }
+  focus() {}
+}
+
+export class ScrollBoxRenderable extends BoxRenderable {
   focus() {}
 }
 

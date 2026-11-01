@@ -5,7 +5,8 @@ import type {
 } from "@opencode-ai/plugin/tui";
 import { createFixedMenu } from "./fixed-menu.ts";
 import { dialogNavigation } from "./navigation.ts";
-import { previewPages } from "./preview.ts";
+import { previewParts } from "./preview.ts";
+import { createTextViewer } from "./text-viewer.ts";
 
 const builtinsKey = "prompt-composer.showBuiltins";
 
@@ -21,7 +22,10 @@ function storeBuiltins(api: TuiPluginApi, value: boolean): void {
 }
 
 const PromptComposerTui: TuiPlugin = async (api) => {
-  const fixedMenu = await createFixedMenu(api);
+  const [fixedMenu, textViewer] = await Promise.all([
+    createFixedMenu(api),
+    createTextViewer(api),
+  ]);
   const navigation = dialogNavigation(api);
   const stopWatching = api.event.on("server.instance.disposed", (event) => {
     if (
@@ -126,20 +130,32 @@ const PromptComposerTui: TuiPlugin = async (api) => {
           text: command.template,
         }),
       );
+      const view = (title: string, text: string) =>
+        navigation.show(
+          () =>
+            textViewer({ title, text: text === "" ? "(empty text)" : text }),
+          false,
+          "xlarge",
+        );
       const preview = (entry: { title: string; text: string }) => {
-        const pages = previewPages(entry.text);
+        const parts = previewParts(entry.text);
+        if (parts.length === 1) {
+          view(entry.title, parts[0]);
+          return;
+        }
+        // Only oversized text is split, keeping each rendered view bounded.
         menu(
-          `${entry.title} — pages`,
-          pages.map((_, index) => ({
-            title: `Page ${index + 1} of ${pages.length}`,
+          `${entry.title} — parts`,
+          parts.map((_, index) => ({
+            title: `Part ${index + 1} of ${parts.length}`,
             value: String(index),
           })),
           (value) => {
             const index = Number(value);
-            navigation.alert({
-              title: `${entry.title} — page ${index + 1}/${pages.length}`,
-              message: pages[index] === "" ? "(empty text)" : pages[index],
-            });
+            view(
+              `${entry.title} — part ${index + 1}/${parts.length}`,
+              parts[index],
+            );
           },
         );
       };

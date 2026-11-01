@@ -4,11 +4,16 @@ import type {
 } from "@opencode-ai/plugin/tui";
 
 type Render = () => ReturnType<TuiPluginApi["ui"]["DialogAlert"]>;
+type Size = TuiPluginApi["ui"]["dialog"]["size"];
+interface Frame {
+  render: Render;
+  size?: Size;
+}
 const backValue = "\u0000back";
 
 /** Retain parent views while using V1's replacement-only dialog API. */
 export function dialogNavigation(api: TuiPluginApi) {
-  let frames: Render[] = [];
+  let frames: Frame[] = [];
   let revision = 0;
   let replacing = false;
   let visible = false;
@@ -42,7 +47,7 @@ export function dialogNavigation(api: TuiPluginApi) {
     };
   };
 
-  const display = (render: Render) => {
+  const display = (frame: Frame) => {
     if (api.lifecycle.signal.aborted) {
       return;
     }
@@ -54,7 +59,7 @@ export function dialogNavigation(api: TuiPluginApi) {
     const active = ++revision;
     replacing = true;
     try {
-      api.ui.dialog.replace(render, () => {
+      api.ui.dialog.replace(frame.render, () => {
         if (replacing || active !== revision) {
           return;
         }
@@ -86,20 +91,25 @@ export function dialogNavigation(api: TuiPluginApi) {
           }
         });
       });
+      // Replacing a dialog restores the host's medium width.
+      if (frame.size !== undefined) {
+        api.ui.dialog.setSize(frame.size);
+      }
       visible = true;
     } finally {
       replacing = false;
     }
   };
-  const show = (render: Render, root = false) => {
+  const show = (render: Render, root = false, size?: Size) => {
     if (api.lifecycle.signal.aborted) {
       return;
     }
     if (root) {
       reset();
     }
-    frames.push(render);
-    display(render);
+    const frame = { render, size };
+    frames.push(frame);
+    display(frame);
   };
   const close = () => {
     reset();
@@ -171,13 +181,10 @@ export function dialogNavigation(api: TuiPluginApi) {
     root = false,
     render?: (props: TuiDialogSelectProps<string>) => ReturnType<Render>,
   ) => show(select(props, render), root);
-  const alert = (props: Parameters<TuiPluginApi["ui"]["DialogAlert"]>[0]) =>
-    show(() => api.ui.DialogAlert(props));
   return {
     show,
     menu,
     select,
-    alert,
     back,
     close,
     reset,

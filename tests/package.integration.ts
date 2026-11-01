@@ -91,7 +91,7 @@ test(
     await writeFile(
       join(root, "consumer.mjs"),
       `import assert from 'node:assert/strict';
-import { fixedMenuApi, fixedMenuView } from ${JSON.stringify(pathToFileURL(resolve("tests/fixed-menu-harness.ts")).href)};
+import { dialogView, fixedMenuApi } from ${JSON.stringify(pathToFileURL(resolve("tests/fixed-menu-harness.ts")).href)};
 import plugin from '@lunchbox-labs/opencode-prompt-composer';
 import tui from '@lunchbox-labs/opencode-prompt-composer/tui';
 assert.equal(tui.id, 'prompt-composer');
@@ -116,9 +116,9 @@ await tui.tui({
   state: { path: { directory: '/remote/project', worktree: '/remote/project' } },
   route: { current: { name: 'home' } },
   lifecycle: { signal: new AbortController().signal, onDispose() {} },
-  keymap: { registerLayer(layer) { commands.push(...layer.commands); open = layer.commands[0].run; return () => {}; } },
+  keymap: { registerLayer(layer) { if (layer.commands) { commands.push(...layer.commands); open = layer.commands[0].run; } return () => {}; } },
   client: { app: { async agents() { return { data: [] }; } }, config: { async get(input) { assert.equal(input.directory, '/remote/project'); reads++; return { data: config }; } } },
-  ui: { DialogSelect: render, DialogAlert: render, dialog: { replace(next) { const fixed = fixedMenuView(next()); if (fixed) current = fixed; }, get open() { return current !== undefined; } } },
+  ui: { DialogSelect: render, DialogAlert: render, dialog: { replace(next) { const view = dialogView(next()); if (view) current = view; }, setSize() {}, get open() { return current !== undefined; } } },
 }, undefined, {});
 assert.deepEqual(commands.map(({ name, slashName }) => ({ name, slashName })), [{ name: 'prompt-composer.view-prompts', slashName: 'view-prompts' }]);
 const choose = (value) => { const item = current.options.find((item) => item.value === value); assert.ok(item); current.onSelect(item); };
@@ -131,7 +131,6 @@ for (const [category, value, expected] of [
   assert.deepEqual(current.options.map((item) => item.value), ['agents', 'commands']);
   choose(category);
   choose(value);
-  choose('0');
   assert.equal(current.message, expected);
 }
 assert.equal(reads, 2);

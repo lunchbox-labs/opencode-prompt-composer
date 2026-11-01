@@ -3,8 +3,13 @@ import { setImmediate } from "node:timers/promises";
 import { test } from "node:test";
 import type { Config } from "@opencode-ai/plugin";
 import type { TuiPluginApi, TuiPluginMeta } from "@opencode-ai/plugin/tui";
+import { VIEW_CHARACTERS } from "../src/preview.ts";
 import tui from "../src/tui.ts";
-import { fixedMenuApi, fixedMenuView } from "./fixed-menu-harness.ts";
+import {
+  destroyFixedMenu,
+  dialogView,
+  fixedMenuApi,
+} from "./fixed-menu-harness.ts";
 
 interface View {
   title: string;
@@ -20,7 +25,9 @@ async function harness(
   agents: { name: string; native?: boolean; prompt?: string }[] = [],
 ) {
   let current: View | undefined;
+  let rendered: unknown;
   let closed: (() => void) | undefined;
+  let size = "medium";
   let open = () => {};
   const listeners = new Set<
     (event: { properties: { directory: string } }) => void
@@ -62,10 +69,13 @@ async function harness(
     route: { current: { name: "home" } },
     keymap: {
       registerLayer(layer: {
-        commands: { name: string; slashName: string; run: () => void }[];
+        commands?: { name: string; slashName: string; run: () => void }[];
       }) {
-        commands.push(...layer.commands);
-        open = layer.commands[0].run;
+        // Viewers add binding-only layers for their focused scroll box.
+        if (layer.commands !== undefined) {
+          commands.push(...layer.commands);
+          open = layer.commands[0].run;
+        }
         return () => {};
       },
     },
@@ -107,16 +117,25 @@ async function harness(
         replace(next: () => unknown, onClose?: () => void) {
           closed?.();
           closed = onClose;
-          const element = next();
-          const fixed = fixedMenuView(element);
-          if (fixed !== undefined) {
-            current = fixed;
+          size = "medium";
+          // The host destroys plugin renderables it removes from the dialog.
+          destroyFixedMenu(rendered);
+          rendered = next();
+          const view = dialogView(rendered);
+          if (view !== undefined) {
+            current = view;
           }
         },
         clear() {
           closed?.();
           closed = undefined;
+          size = "medium";
+          destroyFixedMenu(rendered);
+          rendered = undefined;
           current = undefined;
+        },
+        setSize(next: string) {
+          size = next;
         },
         get open() {
           return current !== undefined;
@@ -162,6 +181,9 @@ async function harness(
     get current() {
       return current;
     },
+    get size() {
+      return size;
+    },
     set read(fn: typeof read) {
       read = fn;
     },
@@ -205,13 +227,11 @@ test("viewer registers prompt commands and preserves loaded text without executi
   assert.equal(h.reads[0].directory, "/remote/project/nested");
   assert.equal(h.reads[0].signal, h.controller.signal);
   h.choose("agent:check");
-  await h.view("Agent: check — pages");
-  h.choose("0");
-  assert.equal((await h.view("Agent: check — page 1/1")).message, text);
+  assert.equal((await h.view("Agent: check")).message, text);
+  assert.equal(h.size, "xlarge");
   await h.escape();
-  await h.view("Agent: check — pages");
-  h.choose("\u0000back");
   await h.view("Loaded agent prompts");
+  assert.equal(h.size, "medium");
   await h.escape();
   await h.view("View prompts");
   h.choose("commands");
@@ -221,14 +241,12 @@ test("viewer registers prompt commands and preserves loaded text without executi
     [{ title: "Command: check", value: "command:check" }],
   );
   h.choose("command:check");
-  await h.view("Command: check — pages");
-  h.choose("0");
   assert.equal(
-    (await h.view("Command: check — page 1/1")).message,
+    (await h.view("Command: check")).message,
     config.command.check.template,
   );
   await h.escape();
-  h.choose("\u0000back");
+  await h.view("Loaded command templates");
   await h.escape();
   await h.escape();
   assert.equal(h.current, undefined);
@@ -236,7 +254,7 @@ test("viewer registers prompt commands and preserves loaded text without executi
   assert.deepEqual(config, before);
 });
 
-test("agent pages retain full Unicode text and label disabled and native fallback entries", async () => {
+test("agent viewers show full Unicode text and label disabled and native fallback entries", async () => {
   const text = `${"🙂 long instruction\r\n\n".repeat(200)}{{include:literal.md}}\n`;
   const h = await harness({
     agent: {
@@ -262,32 +280,15 @@ test("agent pages retain full Unicode text and label disabled and native fallbac
       title,
     );
     h.choose(`agent:${name}`);
-    await h.view(`${title} — pages`);
-    h.choose("0");
     assert.equal(
-      (await h.view(`${title} — page 1/1`)).message,
+      (await h.view(title)).message,
       "(native fallback — no agent prompt text available)",
     );
     await h.escape();
-    h.choose("\u0000back");
+    await h.view("Loaded agent prompts");
   }
   h.choose("agent:review");
-  const pages = (await h.view("Agent: review — pages")).options!.filter(
-    (item) => item.value !== "\u0000back",
-  );
-  const parts: string[] = [];
-  for (const [index, page] of pages.entries()) {
-    h.choose(page.value);
-    const body = (
-      await h.view(`Agent: review — page ${index + 1}/${pages.length}`)
-    ).message!;
-    assert.ok(Array.from(body).length <= 240);
-    assert.ok(body.split("\n").length <= 7);
-    assert.ok(body.isWellFormed());
-    parts.push(body);
-    await h.escape();
-  }
-  assert.equal(parts.join(""), text);
+  assert.equal((await h.view("Agent: review")).message, text);
 });
 
 test("empty categories retain both choices and show truthful empty states", async () => {
@@ -332,7 +333,7 @@ test("empty categories retain both choices and show truthful empty states", asyn
   }
 });
 
-test("command pages preserve whitespace, Unicode, literal syntax and metadata", async () => {
+test("command viewers preserve whitespace, Unicode, literal syntax and metadata", async () => {
   const text = `  $ARGUMENTS $1 !\`touch never\` {{include:literal.md}}\r\n${"🙂 instruction\n".repeat(200)} \t`;
   const config = {
     command: {
@@ -355,30 +356,44 @@ test("command pages preserve whitespace, Unicode, literal syntax and metadata", 
   await h.view("Loaded command templates");
   for (const [name, command] of Object.entries(config.command)) {
     h.choose(`command:${name}`);
-    const pages = (await h.view(`Command: ${name} — pages`)).options!.filter(
-      (item) => item.value !== "\u0000back",
-    );
-    const parts: string[] = [];
-    for (const [index, page] of pages.entries()) {
-      h.choose(page.value);
-      const body = (
-        await h.view(`Command: ${name} — page ${index + 1}/${pages.length}`)
-      ).message!;
-      assert.ok(Array.from(body).length <= 240);
-      assert.ok(body.split("\n").length <= 7);
-      assert.ok(body.isWellFormed());
-      parts.push(body);
-      await h.escape();
-    }
     assert.equal(
-      parts.join(""),
+      (await h.view(`Command: ${name}`)).message,
       command.template === "" ? "(empty text)" : command.template,
     );
-    h.choose("\u0000back");
+    await h.escape();
     await h.view("Loaded command templates");
   }
   assert.deepEqual(config, before);
   assert.equal(h.reads.length, 1);
+});
+
+test("oversized text opens bounded parts that each open in the viewer", async () => {
+  const line = "Review evidence and state uncertainty.\n";
+  const text = line.repeat(Math.ceil((2 * VIEW_CHARACTERS) / line.length));
+  const h = await harness({ command: { long: { template: text } } });
+  h.open();
+  await h.view("View prompts");
+  h.choose("commands");
+  await h.view("Loaded command templates");
+  h.choose("command:long");
+  const parts = (await h.view("Command: long — parts")).options!.filter(
+    (item) => item.value !== "\u0000back",
+  );
+  assert.ok(parts.length > 1);
+  const shown: string[] = [];
+  for (const [index, part] of parts.entries()) {
+    h.choose(part.value);
+    const view = await h.view(
+      `Command: long — part ${index + 1}/${parts.length}`,
+    );
+    assert.equal(h.size, "xlarge");
+    shown.push(view.message!);
+    await h.escape();
+    await h.view("Command: long — parts");
+  }
+  assert.equal(shown.join(""), text);
+  h.choose("\u0000back");
+  await h.view("Loaded command templates");
 });
 
 for (const change of [
@@ -470,7 +485,7 @@ test("read errors offer only a read-only retry that fetches the loaded config", 
   );
 });
 
-test("retired callbacks cannot reopen pages and Back rebinds active callbacks", async () => {
+test("retired callbacks cannot reopen viewers and Escape rebinds active callbacks", async () => {
   const h = await harness({ agent: { check: { prompt: "Text" } } });
   h.open();
   await h.view("View prompts");
@@ -478,13 +493,14 @@ test("retired callbacks cannot reopen pages and Back rebinds active callbacks", 
   const menu = await h.view("Loaded agent prompts");
   const item = menu.options![0];
   h.choose(item.value);
-  const pages = await h.view("Agent: check — pages");
+  const viewer = await h.view("Agent: check");
   menu.onSelect?.(item);
   await setImmediate();
-  assert.equal(h.current, pages);
-  h.choose("\u0000back");
+  assert.equal(h.current, viewer);
+  await h.escape();
+  await h.view("Loaded agent prompts");
   h.choose(item.value);
-  await h.view("Agent: check — pages");
+  await h.view("Agent: check");
   await h.escape();
   await h.escape();
   await h.escape();
@@ -545,7 +561,7 @@ test("retired category callbacks cannot switch categories and Back restores sele
   await h.view("Loaded agent prompts");
 });
 
-for (const stage of ["loading", "root", "agents", "pages", "page"] as const) {
+for (const stage of ["loading", "root", "agents", "viewer"] as const) {
   test(`external instance disposal invalidates ${stage} and its retained callbacks`, async () => {
     const h = await harness({
       agent: { review: { prompt: "Before external reload" } },
@@ -559,17 +575,13 @@ for (const stage of ["loading", "root", "agents", "pages", "page"] as const) {
     }
     h.open();
     await h.view(stage === "loading" ? "Loading prompts" : "View prompts");
-    if (stage === "agents" || stage === "pages" || stage === "page") {
+    if (stage === "agents" || stage === "viewer") {
       h.choose("agents");
       await h.view("Loaded agent prompts");
     }
-    if (stage === "pages" || stage === "page") {
+    if (stage === "viewer") {
       h.choose("agent:review");
-      await h.view("Agent: review — pages");
-    }
-    if (stage === "page") {
-      h.choose("0");
-      await h.view("Agent: review — page 1/1");
+      await h.view("Agent: review");
     }
     const retired = h.current!;
     h.disposed("/unrelated");
@@ -577,7 +589,9 @@ for (const stage of ["loading", "root", "agents", "pages", "page"] as const) {
     h.disposed();
     await setImmediate();
     assert.equal(h.current, undefined);
-    retired.onSelect?.(retired.options![0]);
+    if (retired.options !== undefined) {
+      retired.onSelect?.(retired.options[0]);
+    }
     finish();
     await setImmediate();
     assert.equal(h.current, undefined);
@@ -589,9 +603,8 @@ for (const stage of ["loading", "root", "agents", "pages", "page"] as const) {
     await h.view("View prompts");
     h.choose("agents");
     h.choose("agent:review");
-    h.choose("0");
     assert.equal(
-      (await h.view("Agent: review — page 1/1")).message,
+      (await h.view("Agent: review")).message,
       "After external reload",
     );
   });
@@ -674,14 +687,12 @@ test("native metadata hides only unconfigured built-ins and the toggle replaces 
   );
   assert.equal(h.current, menu, "retired toggle cannot change active view");
   h.choose("agent:native-future-name");
-  await h.view("Agent: native-future-name (built-in) — pages");
-  h.choose("0");
   assert.equal(
-    (await h.view("Agent: native-future-name (built-in) — page 1/1")).message,
+    (await h.view("Agent: native-future-name (built-in)")).message,
     "Native full body",
   );
   await h.escape();
-  h.choose("\u0000back");
+  await h.view("Loaded agent prompts");
   h.choose("\u0000builtins");
   menu = await h.view("Loaded agent prompts");
   assert.ok(!values().includes("agent:native-future-name"));
@@ -751,11 +762,9 @@ test("runtime fallback requires an unambiguous active agent and preserves whites
     ],
   ]) {
     h.choose(`agent:${name}`);
-    await h.view(`${title} — pages`);
-    h.choose("0");
-    assert.equal((await h.view(`${title} — page 1/1`)).message, expected);
+    assert.equal((await h.view(title)).message, expected);
     await h.escape();
-    h.choose("\u0000back");
+    await h.view("Loaded agent prompts");
   }
 });
 

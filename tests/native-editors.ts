@@ -10,8 +10,8 @@ import type {
 } from "@opencode-ai/plugin/tui";
 import {
   destroyFixedMenu,
+  dialogView,
   fixedMenuApi,
-  fixedMenuView,
 } from "./fixed-menu-harness.ts";
 
 export type Request = (path: string, body?: unknown) => Promise<unknown>;
@@ -81,8 +81,12 @@ export async function exercisePromptViewer(
     route: { current: { name: "home" } },
     keymap: {
       registerLayer(layer: {
-        commands: { slashName: string; run: () => void }[];
+        commands?: { slashName: string; run: () => void }[];
       }) {
+        // Viewers add binding-only layers for their focused scroll box.
+        if (layer.commands === undefined) {
+          return () => {};
+        }
         assert.deepEqual(
           layer.commands.map((command) => command.slashName),
           ["view-prompts"],
@@ -114,11 +118,12 @@ export async function exercisePromptViewer(
           closed = onClose;
           destroyFixedMenu(rendered);
           rendered = next();
-          const fixed = fixedMenuView(rendered);
-          if (fixed !== undefined) {
-            render(fixed);
+          const view = dialogView(rendered);
+          if (view !== undefined) {
+            render(view);
           }
         },
+        setSize() {},
         clear() {
           closed?.();
           closed = undefined;
@@ -160,20 +165,8 @@ export async function exercisePromptViewer(
   }
   async function preview(value: string, title: string, expected: string) {
     choose(value);
-    const pages = (await view(`${title} — pages`)).options!.filter(
-      (item) => item.value !== "\u0000back",
-    );
-    const text: string[] = [];
-    for (const [index, page] of pages.entries()) {
-      choose(page.value);
-      text.push(
-        (await view(`${title} — page ${index + 1}/${pages.length}`)).message!,
-      );
-      api.ui.dialog.clear();
-      await view(`${title} — pages`);
-    }
-    assert.equal(text.join(""), expected);
-    choose("\u0000back");
+    assert.equal((await view(title)).message, expected);
+    api.ui.dialog.clear();
   }
   function hiddenBuiltins() {
     const options = current?.options;
