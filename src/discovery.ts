@@ -10,7 +10,7 @@ import {
   resolve,
   sep,
 } from "node:path";
-import { mapBounded } from "./bounded-map.ts";
+import { STARTUP_CONCURRENCY, mapBounded } from "./bounded-map.ts";
 import { SettingsError } from "./errors.ts";
 
 const MAX_ENTRIES = 4096;
@@ -157,34 +157,43 @@ export async function discoverPrompts(
       const children = (await readdir(path, { withFileTypes: true }))
         .filter((entry) => !entry.name.startsWith("."))
         .sort((a, b) => a.name.localeCompare(b.name));
-      // Resolve siblings concurrently, but only as many as the entry limit can
-      // still admit. Applying them in sorted order below keeps inventory order
-      // and the first reported error identical to a sequential walk.
-      const resolved = await mapBounded(
-        children.slice(0, MAX_ENTRIES - entries),
-        (entry) => resolveChild(join(path, entry.name)),
-      );
-      for (const [index, entry] of children.entries()) {
-        if (++entries > MAX_ENTRIES) {
-          throw new SettingsError(
-            `Prompt discovery exceeds ${MAX_ENTRIES} entries.`,
-          );
-        }
-        const child = join(path, entry.name);
-        // The limit check above guarantees this child was resolved.
-        const result = resolved[index];
-        if ("error" in result) {
-          throw result.error;
-        }
-        const { metadata } = result;
-        if (metadata.isDirectory()) {
-          await scan(child, new Set([...parents, canonical]));
-        } else if (
-          metadata.isFile() &&
-          [".md", ".txt"].includes(extname(entry.name).toLowerCase())
-        ) {
-          const name = relative(root, child).split(sep).join("/");
-          files.set(name, { path: child, root, relativePath: name });
+      for (
+        let start = 0;
+        start < children.length;
+        start += STARTUP_CONCURRENCY
+      ) {
+        const batch = children.slice(start, start + STARTUP_CONCURRENCY);
+        // Resolve each batch of siblings concurrently just before applying it,
+        // and only as many as the entry limit still admits, so lookups stop
+        // soon after the limit or a failure even when an earlier subtree used
+        // the budget. Applying them in sorted order keeps inventory order and
+        // the first reported error identical to a sequential walk.
+        const resolved = await mapBounded(
+          batch.slice(0, MAX_ENTRIES - entries),
+          (entry) => resolveChild(join(path, entry.name)),
+        );
+        for (const [index, entry] of batch.entries()) {
+          if (++entries > MAX_ENTRIES) {
+            throw new SettingsError(
+              `Prompt discovery exceeds ${MAX_ENTRIES} entries.`,
+            );
+          }
+          const child = join(path, entry.name);
+          // The limit check above guarantees this child was resolved.
+          const result = resolved[index];
+          if ("error" in result) {
+            throw result.error;
+          }
+          const { metadata } = result;
+          if (metadata.isDirectory()) {
+            await scan(child, new Set([...parents, canonical]));
+          } else if (
+            metadata.isFile() &&
+            [".md", ".txt"].includes(extname(entry.name).toLowerCase())
+          ) {
+            const name = relative(root, child).split(sep).join("/");
+            files.set(name, { path: child, root, relativePath: name });
+          }
         }
       }
     }

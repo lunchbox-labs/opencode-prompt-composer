@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs, { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { type TestContext, test } from "node:test";
 import { setTimeout } from "node:timers/promises";
 import { STARTUP_CONCURRENCY } from "../src/bounded-map.ts";
@@ -197,21 +197,30 @@ test("discovery resolves a bounded number of entries at a time and stops at the 
   t.after(() => rm(root, { recursive: true, force: true }));
   const project = join(root, "project");
   const prompts = join(project, ".opencode/prompts");
-  await mkdir(prompts, { recursive: true });
-  const names = Array.from({ length: 4100 }, (_, index) => `${index}.md`);
-  for (let index = 0; index < names.length; index += 256) {
+  // Each enclosing directory lists its subdirectory first, ahead of many
+  // files, and the innermost directory alone exceeds the entry limit.
+  const middle = join(prompts, "0");
+  const inner = join(middle, "0");
+  await mkdir(inner, { recursive: true });
+  const files = [
+    ...[prompts, middle].flatMap((directory) =>
+      Array.from({ length: 100 }, (_, index) =>
+        join(directory, `${index + 1}.md`),
+      ),
+    ),
+    ...Array.from({ length: 4100 }, (_, index) => join(inner, `${index}.md`)),
+  ];
+  for (let index = 0; index < files.length; index += 256) {
     await Promise.all(
-      names
-        .slice(index, index + 256)
-        .map((name) => writeFile(join(prompts, name), name)),
+      files.slice(index, index + 256).map((file) => writeFile(file, "prompt")),
     );
   }
   let active = 0;
   let peak = 0;
-  let resolved = 0;
+  const looked = new Set<string>();
   wrapRealpath(t, async (path, resolve) => {
-    if (dirname(path) === prompts) {
-      resolved++;
+    if (path.startsWith(prompts + sep)) {
+      looked.add(path);
     }
     peak = Math.max(peak, ++active);
     try {
@@ -232,5 +241,10 @@ test("discovery resolves a bounded number of entries at a time and stops at the 
     /exceeds 4096 entries/,
   );
   assert.ok(peak <= STARTUP_CONCURRENCY, `peak ${peak}`);
-  assert.ok(resolved <= 4096, `resolved ${resolved}`);
+  // Past the limit, each enclosing directory has looked up only the rest of
+  // the batch that held its subdirectory.
+  assert.ok(
+    looked.size <= 4096 + 2 * (STARTUP_CONCURRENCY - 1),
+    `looked up ${looked.size} entries`,
+  );
 });
