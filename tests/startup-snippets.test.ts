@@ -122,16 +122,106 @@ test("invalid unused snippets retain their capture errors after disk repair", as
   await hooks.config!({ agent: { ordinary: { prompt: "No includes" } } });
   for (const name of ["large.md", "nul.md", "utf8.md"]) {
     await writeFile(join(f.directory, name), "Repaired");
-    const output = skill(`{{include:${name}}}`);
-    const before = structuredClone(output);
-    await assert.rejects(hooks["tool.execute.after"]!(skillInput, output));
-    assert.deepEqual(output, before);
+    for (const marker of ["include", "include?"]) {
+      const output = skill(`{{${marker}:${name}}}`);
+      const before = structuredClone(output);
+      await assert.rejects(hooks["tool.execute.after"]!(skillInput, output));
+      assert.deepEqual(output, before);
+    }
   }
   const next = await server.server(f.context);
-  await assert.rejects(
-    next.config!({ command: { check: { template: "{{include:large.md}}" } } }),
-    /64 KiB/,
+  for (const template of ["{{include:large.md}}", "{{include?:large.md}}"]) {
+    await assert.rejects(
+      next.config!({ command: { check: { template } } }),
+      /64 KiB/,
+    );
+  }
+});
+
+test("optional includes compose agents, commands and skills with and without their snippets", async (t) => {
+  const f = await fixture(t);
+  await writeFile(
+    join(f.directory, "personal.md"),
+    " Personal {{include:nested.txt}} ",
   );
+  await writeFile(join(f.directory, "nested.txt"), "evidence");
+  await writeFile(join(f.directory, "requires.md"), "{{include:absent.md}}");
+  const hooks = await server.server(f.context);
+  const text =
+    "Review. {{include?:personal.md}}{{include?:absent.md}} \\{{include?:literal.md}}";
+  const expected = "Review. Personal evidence {{include?:literal.md}}";
+  const current: Config = {
+    agent: { review: { prompt: text } },
+    command: { check: { template: text } },
+  };
+  await hooks.config!(current);
+  assert.equal(current.agent!.review!.prompt, expected);
+  assert.equal(current.command!.check.template, expected);
+  const output = skill(text);
+  await hooks["tool.execute.after"]!(skillInput, output);
+  assert.equal(output.output, skill(expected).output);
+  for (const [body, error] of [
+    ["{{include?:../personal.md}}", /safe relative/],
+    ["{{include?:requires.md}}", /"absent\.md" does not exist/],
+  ] as const) {
+    await assert.rejects(
+      hooks.config!({ agent: { review: { prompt: body } } }),
+      error,
+    );
+    await assert.rejects(
+      hooks.config!({ command: { check: { template: body } } }),
+      error,
+    );
+    await assert.rejects(
+      hooks["tool.execute.after"]!(skillInput, skill(body)),
+      error,
+    );
+  }
+});
+
+test(
+  "optional includes fail for present snippets that cannot be read",
+  {
+    skip:
+      process.platform === "win32" || process.getuid?.() === 0
+        ? "File permissions cannot deny reads here"
+        : false,
+  },
+  async (t) => {
+    const f = await fixture(t);
+    const path = join(f.directory, "personal.md");
+    await writeFile(path, "Personal");
+    await chmod(path, 0o000);
+    const hooks = await server.server(f.context);
+    await assert.rejects(
+      hooks.config!({
+        agent: { review: { prompt: "Review {{include?:personal.md}}" } },
+      }),
+      /Could not read prompt include "personal\.md"/,
+    );
+  },
+);
+
+test("includes fail for present prompt names that are not regular files", async (t) => {
+  const f = await fixture(t);
+  // A directory or FIFO at the referenced path is invalid, not absent.
+  await mkdir(join(f.directory, "personal/review.md"), { recursive: true });
+  const names = ["personal/review.md"];
+  if (process.platform !== "win32") {
+    await promisify(execFile)("mkfifo", [join(f.directory, "fifo.md")]);
+    names.push("fifo.md");
+  }
+  const hooks = await server.server(f.context);
+  for (const name of names) {
+    for (const marker of ["include", "include?"]) {
+      await assert.rejects(
+        hooks.config!({
+          agent: { review: { prompt: `[{{${marker}:${name}}}]` } },
+        }),
+        /must be regular UTF-8 files/,
+      );
+    }
+  }
 });
 
 test("startup sources retain per-consumer cycles, byte limits and original error positions", async (t) => {

@@ -32,6 +32,14 @@ Distinguish observed behavior from assumptions.
 
 Includes accept relative `.md` and `.txt` paths and expand recursively. Each included file is trimmed at its edges; surrounding text determines spacing. Escape a literal marker with `\{{include:review.md}}`.
 
+Mark an include optional with `?` when the snippet may be absent, such as personal guidance in a shared project agent:
+
+```markdown
+{{include?:personal/review.md}}
+```
+
+If no discovered prompts directory contains the file, the marker expands to nothing; a developer opts in by adding `~/.config/opencode/prompts/personal/review.md`. Everything else matches `{{include:...}}`: invalid paths, unreadable or invalid files, cycles and limits still fail composition.
+
 Prompt files live in `prompts/` under OpenCode's configuration directories. Later discovered files override earlier files with the same relative path. See [Discovery](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Discovery) for precedence and limits.
 
 Skill bodies expand through the native `skill` tool; automatically generated skill slash commands do not expand includes.

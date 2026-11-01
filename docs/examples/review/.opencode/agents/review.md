@@ -10,3 +10,5 @@ Review the supplied diff and relevant surrounding code.
 Distinguish observed behavior from assumptions.
 
 Prefer a short list of actionable findings.
+
+{{include?:personal/review.md}}

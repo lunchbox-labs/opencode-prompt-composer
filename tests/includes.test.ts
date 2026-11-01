@@ -107,20 +107,26 @@ test("public includes stay live and observer mutation cannot alter loaded text",
 test("rejects unsafe and malformed references without reading outside the alias", async (t) => {
   const { root, sources } = await fixture(t);
   await writeFile(join(root, "outside.md"), "secret");
-  for (const reference of [
-    "../outside.md",
-    ".hidden.md",
-    "a//b.md",
-    "a/./b.md",
-    "a\\b.md",
-    "C:/a.md",
-    "file.json",
-    "/outside.md",
-    "a\u0001.md",
-  ]) {
+  for (const marker of ["include", "include?"]) {
+    for (const reference of [
+      "../outside.md",
+      ".hidden.md",
+      "a//b.md",
+      "a/./b.md",
+      "a\\b.md",
+      "C:/a.md",
+      "file.json",
+      "/outside.md",
+      "a\u0001.md",
+    ]) {
+      await assert.rejects(
+        expandIncludes(`{{${marker}:${reference}}}`, sources),
+        /safe relative/,
+      );
+    }
     await assert.rejects(
-      expandIncludes(`{{include:${reference}}}`, sources),
-      /safe relative/,
+      expandIncludes(`{{${marker}:a.md`, sources),
+      /invalid syntax/,
     );
   }
   await assert.rejects(
@@ -130,10 +136,6 @@ test("rejects unsafe and malformed references without reading outside the alias"
   await assert.rejects(
     expandIncludes("{{include:a.md}}", sources),
     /does not exist/,
-  );
-  await assert.rejects(
-    expandIncludes("{{include:a.md", sources),
-    /invalid syntax/,
   );
   await assert.rejects(
     expandIncludes("{{include:missing.md}}", sources),
@@ -153,14 +155,42 @@ test("rejects escaped symlinks and recursive aliases", async (t) => {
     }
     throw error;
   }
-  await assert.rejects(
-    expandIncludes("{{include:link.md}}", sources),
-    /escapes/,
+  for (const marker of ["include", "include?"]) {
+    await assert.rejects(
+      expandIncludes(`{{${marker}:link.md}}`, sources),
+      /escapes/,
+    );
+    await writeFile(join(root, "prompts/cycle.md"), `{{${marker}:cycle.md}}`);
+    await assert.rejects(
+      expandIncludes(`{{${marker}:cycle.md}}`, sources),
+      /cycle/,
+    );
+  }
+});
+
+test("optional includes expand discovered snippets and drop only missing ones", async (t) => {
+  const { sources } = await fixture(t);
+  await writeFile(
+    join(sources, "personal.md"),
+    "  Personal {{include:shared.txt}}  ",
   );
-  await writeFile(join(root, "prompts/cycle.md"), "{{include:cycle.md}}");
+  await writeFile(join(sources, "shared.txt"), "evidence{{include?:none.txt}}");
+  await writeFile(join(sources, "requires.md"), "{{include:missing.md}}");
+  assert.equal(
+    await expandIncludes(
+      "A {{include?:personal.md}} B{{include?:missing.md}} C \\{{include?:personal.md}} \\{{include?:",
+      sources,
+    ),
+    "A Personal evidence B C {{include?:personal.md}} {{include?:",
+  );
+  // A nested marker keeps its own form inside an optional snippet.
   await assert.rejects(
-    expandIncludes("{{include:cycle.md}}", sources),
-    /cycle/,
+    expandIncludes("{{include?:requires.md}}", sources),
+    (error: Error) => {
+      assert.match(error.message, /"missing\.md" does not exist/);
+      assert.match(error.message, /chain: "requires\.md" -> "missing\.md"/);
+      return true;
+    },
   );
 });
 
@@ -169,6 +199,7 @@ test("enforces text, snippet, composed-size, count and nesting budgets", async (
   for (const content of [Buffer.from([0xff]), "bad\0text", "x".repeat(65537)]) {
     await writeFile(join(root, "prompts/bad.md"), content);
     await assert.rejects(expandIncludes("{{include:bad.md}}", sources));
+    await assert.rejects(expandIncludes("{{include?:bad.md}}", sources));
   }
   await writeFile(join(root, "prompts/valid.md"), "x".repeat(65536));
   await assert.rejects(
@@ -177,10 +208,12 @@ test("enforces text, snippet, composed-size, count and nesting budgets", async (
   );
 
   await writeFile(join(root, "prompts/empty.md"), "");
-  await assert.rejects(
-    expandIncludes("{{include:empty.md}}".repeat(257), sources),
-    /count or nesting/,
-  );
+  for (const marker of ["{{include:empty.md}}", "{{include?:missing.md}}"]) {
+    await assert.rejects(
+      expandIncludes(marker.repeat(257), sources),
+      /count or nesting/,
+    );
+  }
   for (let n = 0; n < 34; n++) {
     await writeFile(
       join(root, `prompts/${n}.md`),
