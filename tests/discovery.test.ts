@@ -134,10 +134,12 @@ test("reports the first failing entry in sorted order", async (t) => {
   }
   const discover = () =>
     discoverPrompts({ directory: f.nested, worktree: f.project }, f.env);
-  await mkdir(join(prompts, "a"));
-  await symlink(join(prompts, "a"), join(prompts, "a/loop"));
+  await mkdir(join(prompts, "a", ...Array<string>(32).fill("d")), {
+    recursive: true,
+  });
   await assert.rejects(discover(), /cycle or depth limit/);
-  await rm(join(prompts, "a/loop"));
+  await rm(join(prompts, "a"), { recursive: true });
+  await mkdir(join(prompts, "a"));
   await mkdir(join(prompts, ".private"));
   await writeFile(join(prompts, ".private/body.md"), "Private");
   await symlink(join(prompts, ".private/body.md"), join(prompts, "a/body.md"));
