@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs";
 import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import {
@@ -24,6 +25,13 @@ export interface PromptInventory {
   directories: string[];
   files: Map<string, DiscoveredPrompt>;
 }
+type Lookup = { metadata: Stats } | { error: unknown };
+
+const MAX_ENTRIES = 4096;
+// Bounds how many child lookups run at once and how many run ahead of an
+// earlier sibling's failure. Under Bun each realpath briefly holds an O_PATH
+// descriptor, so in the plugin host this also bounds discovery's descriptors.
+const LOOKUP_BATCH = 16;
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -110,6 +118,26 @@ export async function discoverPrompts(
       continue;
     }
     const canonicalRoot = await realpath(root);
+    // Resolve and check a child before stat so rejected targets are never inspected.
+    async function lookup(child: string): Promise<Lookup> {
+      try {
+        const target = await realpath(child);
+        if (!contained(canonicalRoot, target)) {
+          throw new SettingsError(
+            `A discovered prompt escapes its prompts directory: ${child}.`,
+          );
+        }
+        const local = relative(canonicalRoot, target).split(sep);
+        if (local.some((part) => part.startsWith("."))) {
+          throw new SettingsError(
+            "A discovered prompt resolves to a hidden path.",
+          );
+        }
+        return { metadata: await stat(target) };
+      } catch (error) {
+        return { error };
+      }
+    }
     async function scan(path: string, parents: Set<string>): Promise<void> {
       const canonical = await realpath(path);
       if (!contained(canonicalRoot, canonical)) {
@@ -124,41 +152,54 @@ export async function discoverPrompts(
       }
       const info = await stat(canonical);
       if (!info.isDirectory()) {
+        // A child was a directory when looked up, so for a child this means
+        // the tree changed during discovery rather than a configuration error.
         throw new SettingsError(
-          `Prompt discovery expects a directory: ${path}.`,
+          parents.size === 0
+            ? `Prompt discovery expects a directory: ${path}.`
+            : `Prompt discovery changed: ${path}. Retry composition.`,
         );
       }
-      for (const entry of (await readdir(path, { withFileTypes: true })).sort(
-        (a, b) => a.name.localeCompare(b.name),
-      )) {
-        if (entry.name.startsWith(".")) {
-          continue;
-        }
-        if (++entries > 4096) {
-          throw new SettingsError("Prompt discovery exceeds 4096 entries.");
-        }
-        const child = join(path, entry.name);
-        const target = await realpath(child);
-        if (!contained(canonicalRoot, target)) {
-          throw new SettingsError(
-            `A discovered prompt escapes its prompts directory: ${child}.`,
-          );
-        }
-        const local = relative(canonicalRoot, target).split(sep);
-        if (local.some((part) => part.startsWith("."))) {
-          throw new SettingsError(
-            "A discovered prompt resolves to a hidden path.",
-          );
-        }
-        const metadata = await stat(target);
-        if (metadata.isDirectory()) {
-          await scan(child, new Set([...parents, canonical]));
-        } else if (
-          metadata.isFile() &&
-          [".md", ".txt"].includes(extname(entry.name).toLowerCase())
-        ) {
-          const name = relative(root, child).split(sep).join("/");
-          files.set(name, { path: child, root, relativePath: name });
+      const names = (await readdir(path))
+        .filter((name) => !name.startsWith("."))
+        .sort((a, b) => a.localeCompare(b));
+      for (let start = 0; start < names.length; start += LOOKUP_BATCH) {
+        const batch = names.slice(start, start + LOOKUP_BATCH);
+        // Settle a batch of lookups, then apply it in sorted order so the
+        // inventory and the first reported error match a sequential walk.
+        // No lookup starts for entries the count already places past the
+        // limit. Walking an earlier subdirectory can use up the rest, so up to
+        // LOOKUP_BATCH - 1 later siblings per directory still being walked may
+        // be looked up past it; counting fails before their results are used.
+        const lookups = await Promise.all(
+          batch
+            .slice(0, MAX_ENTRIES - entries)
+            .map((name) => lookup(join(path, name))),
+        );
+        for (const [index, name] of batch.entries()) {
+          if (++entries > MAX_ENTRIES) {
+            throw new SettingsError(
+              `Prompt discovery exceeds ${MAX_ENTRIES} entries.`,
+            );
+          }
+          const result = lookups[index];
+          if ("error" in result) {
+            throw result.error;
+          }
+          const child = join(path, name);
+          if (result.metadata.isDirectory()) {
+            await scan(child, new Set([...parents, canonical]));
+          } else if (
+            result.metadata.isFile() &&
+            [".md", ".txt"].includes(extname(name).toLowerCase())
+          ) {
+            const reference = relative(root, child).split(sep).join("/");
+            files.set(reference, {
+              path: child,
+              root,
+              relativePath: reference,
+            });
+          }
         }
       }
     }

@@ -326,6 +326,65 @@ for (const mutation of ["edit", "add"] as const) {
   });
 }
 
+for (const [from, to] of [
+  ["file", "directory"],
+  ["directory", "file"],
+] as const) {
+  test(`startup never publishes a sibling ${from} replaced by a ${to} while discovery walks an earlier directory`, async (t) => {
+    const f = await fixture(t);
+    const earlier = join(f.directory, "a");
+    const sibling = join(f.directory, "b.md");
+    const place = async (kind: "file" | "directory", text: string) => {
+      if (kind === "file") {
+        await writeFile(sibling, text);
+        return;
+      }
+      await mkdir(sibling);
+      await writeFile(join(sibling, "c.md"), text);
+    };
+    await mkdir(earlier);
+    await writeFile(join(earlier, "body.md"), "Startup");
+    await place(from, "Sibling");
+    const readdir = fs.readdir;
+    let changed = false;
+    t.mock.method(
+      fs,
+      "readdir",
+      async (...args: Parameters<typeof readdir>) => {
+        if (!changed && args[0] === earlier) {
+          changed = true;
+          await rm(sibling, { recursive: true });
+          await place(to, "Changed");
+        }
+        return readdir(...args);
+      },
+    );
+    syncBuiltinESMExports();
+    t.after(() => {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    });
+    const hooks = await server.server(f.context);
+    const current: Config = {
+      command: {
+        check: {
+          template: `{{include:${to === "file" ? "b.md" : "b.md/c.md"}}}`,
+        },
+      },
+    };
+    const before = structuredClone(current);
+    // Discovery may look up b.md before walking a/; a stale result must not be published.
+    try {
+      await hooks.config!(current);
+    } catch (error) {
+      assert.match((error as Error).message, /changed/i);
+      assert.deepEqual(current, before);
+      return;
+    }
+    assert.equal(current.command!.check.template, "Changed");
+  });
+}
+
 test(
   "startup captures every valid snippet under a bounded descriptor limit",
   { skip: process.platform === "win32" },
