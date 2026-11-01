@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs, { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { discoverPrompts } from "../src/discovery.ts";
 
@@ -31,6 +31,29 @@ async function fixture(t: TestContext) {
     OPENCODE_CONFIG_DIR: custom,
   };
   return { root, home, global, project, nested, custom, roots, env };
+}
+
+/** Records the realpath and stat calls discovery makes for each entry it looks up. */
+function traceLookups(t: TestContext) {
+  const trace = { paths: [] as string[], active: 0, peak: 0 };
+  for (const name of ["realpath", "stat"] as const) {
+    const original = fs[name] as (...args: unknown[]) => Promise<unknown>;
+    t.mock.method(fs, name, async (...args: unknown[]) => {
+      trace.paths.push(String(args[0]));
+      trace.peak = Math.max(trace.peak, ++trace.active);
+      try {
+        return await original(...args);
+      } finally {
+        trace.active--;
+      }
+    });
+  }
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  return trace;
 }
 
 test("mirrors pinned host root order and later relative-path overrides", async (t) => {
@@ -174,9 +197,20 @@ test("allows exactly 4096 entries and reports the limit before later failures", 
   const result = await discover();
   assert.equal(result.files.size, 4095);
   assert.equal(result.files.has("many/4094.md"), true);
-  await writeFile(join(many, name(4095)), "Snippet");
+  // The limit falls inside a lookup batch; its later entries are never resolved.
+  const past = Array.from({ length: 4 }, (_, offset) => name(4095 + offset));
+  for (const file of past) {
+    await writeFile(join(many, file), "Snippet");
+  }
+  const trace = traceLookups(t);
   await assert.rejects(discover(), /exceeds 4096 entries/);
-  await rm(join(many, name(4095)));
+  assert.deepEqual(
+    trace.paths.filter((path) => past.includes(basename(path))),
+    [],
+  );
+  for (const file of past) {
+    await rm(join(many, file));
+  }
   await writeFile(join(f.root, "secret.md"), "secret");
   try {
     await symlink(join(f.root, "secret.md"), join(prompts, "z.md"));
@@ -190,35 +224,33 @@ test("allows exactly 4096 entries and reports the limit before later failures", 
   await assert.rejects(discover(), /exceeds 4096 entries/);
 });
 
-test("discovery keeps a bounded number of path lookups in flight", async (t) => {
+test("discovery overlaps a bounded number of path lookups", async (t) => {
   const f = await fixture(t);
   const prompts = join(f.global, "prompts");
   for (let index = 0; index < 100; index++) {
     await mkdir(join(prompts, `area-${index % 4}`), { recursive: true });
     await writeFile(join(prompts, `area-${index % 4}`, `${index}.md`), "Text");
   }
-  let active = 0;
-  let peak = 0;
-  for (const name of ["realpath", "stat"] as const) {
-    const original = fs[name] as (...args: unknown[]) => Promise<unknown>;
-    t.mock.method(fs, name, async (...args: unknown[]) => {
-      peak = Math.max(peak, ++active);
-      try {
-        return await original(...args);
-      } finally {
-        active--;
-      }
-    });
-  }
-  syncBuiltinESMExports();
-  t.after(() => {
-    t.mock.restoreAll();
-    syncBuiltinESMExports();
-  });
+  const trace = traceLookups(t);
   const result = await discoverPrompts(
     { directory: f.nested, worktree: f.project },
     f.env,
   );
   assert.equal(result.files.has("area-3/99.md"), true);
-  assert.ok(peak <= 16, `${peak} path lookups were in flight`);
+  assert.ok(trace.peak > 1, "path lookups ran one at a time");
+  assert.ok(trace.peak <= 16, `${trace.peak} path lookups were in flight`);
 });
+
+test(
+  "rejects a directory symlink loop",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const f = await fixture(t);
+    const review = join(f.global, "prompts/review");
+    await symlink(review, join(review, "loop"));
+    await assert.rejects(
+      discoverPrompts({ directory: f.nested, worktree: f.project }, f.env),
+      /cycle or depth limit/,
+    );
+  },
+);

@@ -28,8 +28,9 @@ export interface PromptInventory {
 type Lookup = { metadata: Stats } | { error: unknown };
 
 const MAX_ENTRIES = 4096;
-// Child lookups hold no descriptors. Batches still bound how many run at once
-// and how many run ahead of an earlier sibling's failure.
+// Bounds how many child lookups run at once and how many run ahead of an
+// earlier sibling's failure. Under Bun each realpath briefly holds an O_PATH
+// descriptor, so in the plugin host this also bounds discovery's descriptors.
 const LOOKUP_BATCH = 16;
 
 async function exists(path: string): Promise<boolean> {
@@ -166,7 +167,10 @@ export async function discoverPrompts(
         const batch = names.slice(start, start + LOOKUP_BATCH);
         // Settle a batch of lookups, then apply it in sorted order so the
         // inventory and the first reported error match a sequential walk.
-        // Entries past the limit are not looked up; counting fails first.
+        // No lookup starts for entries the count already places past the
+        // limit. Walking an earlier subdirectory can use up the rest, so up to
+        // LOOKUP_BATCH - 1 later siblings per directory still being walked may
+        // be looked up past it; counting fails before their results are used.
         const lookups = await Promise.all(
           batch
             .slice(0, MAX_ENTRIES - entries)
