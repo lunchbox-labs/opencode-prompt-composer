@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { mapBounded } from "./bounded-map.ts";
 import {
   type DiscoveredPrompt,
   type DiscoveryContext,
@@ -38,16 +39,8 @@ async function capture(
   const inventory = await discoverPrompts(context, environment);
   // Bound open handles even for the largest supported prompt inventory.
   const entries = [...inventory.files];
-  const loaded: Captured[] = [];
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(16, entries.length) }, async () => {
-      while (next < entries.length) {
-        const index = next++;
-        const [reference, source] = entries[index];
-        loaded[index] = await read(reference, source);
-      }
-    }),
+  const loaded = await mapBounded(entries, ([reference, source]) =>
+    read(reference, source),
   );
   const captured = new Map<string, Captured>();
   const reads: PromptDependency[] = [];

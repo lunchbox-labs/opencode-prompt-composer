@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs";
 import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import {
@@ -9,7 +10,12 @@ import {
   resolve,
   sep,
 } from "node:path";
+import { mapBounded } from "./bounded-map.ts";
 import { SettingsError } from "./errors.ts";
+
+const MAX_ENTRIES = 4096;
+
+type Resolved = { metadata: Stats } | { error: unknown };
 
 export interface DiscoveryContext {
   directory: string;
@@ -110,6 +116,26 @@ export async function discoverPrompts(
       continue;
     }
     const canonicalRoot = await realpath(root);
+    async function resolveChild(child: string): Promise<Resolved> {
+      try {
+        const target = await realpath(child);
+        if (!contained(canonicalRoot, target)) {
+          throw new SettingsError(
+            `A discovered prompt escapes its prompts directory: ${child}.`,
+          );
+        }
+        const local = relative(canonicalRoot, target).split(sep);
+        if (local.some((part) => part.startsWith("."))) {
+          throw new SettingsError(
+            "A discovered prompt resolves to a hidden path.",
+          );
+        }
+        return { metadata: await stat(target) };
+      } catch (error) {
+        // Report it in traversal order, after earlier siblings and their subtrees.
+        return { error };
+      }
+    }
     async function scan(path: string, parents: Set<string>): Promise<void> {
       const canonical = await realpath(path);
       if (!contained(canonicalRoot, canonical)) {
@@ -128,29 +154,29 @@ export async function discoverPrompts(
           `Prompt discovery expects a directory: ${path}.`,
         );
       }
-      for (const entry of (await readdir(path, { withFileTypes: true })).sort(
-        (a, b) => a.name.localeCompare(b.name),
-      )) {
-        if (entry.name.startsWith(".")) {
-          continue;
-        }
-        if (++entries > 4096) {
-          throw new SettingsError("Prompt discovery exceeds 4096 entries.");
+      const children = (await readdir(path, { withFileTypes: true }))
+        .filter((entry) => !entry.name.startsWith("."))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      // Resolve siblings concurrently, but only as many as the entry limit can
+      // still admit. Applying them in sorted order below keeps inventory order
+      // and the first reported error identical to a sequential walk.
+      const resolved = await mapBounded(
+        children.slice(0, MAX_ENTRIES - entries),
+        (entry) => resolveChild(join(path, entry.name)),
+      );
+      for (const [index, entry] of children.entries()) {
+        if (++entries > MAX_ENTRIES) {
+          throw new SettingsError(
+            `Prompt discovery exceeds ${MAX_ENTRIES} entries.`,
+          );
         }
         const child = join(path, entry.name);
-        const target = await realpath(child);
-        if (!contained(canonicalRoot, target)) {
-          throw new SettingsError(
-            `A discovered prompt escapes its prompts directory: ${child}.`,
-          );
+        // The limit check above guarantees this child was resolved.
+        const result = resolved[index];
+        if ("error" in result) {
+          throw result.error;
         }
-        const local = relative(canonicalRoot, target).split(sep);
-        if (local.some((part) => part.startsWith("."))) {
-          throw new SettingsError(
-            "A discovered prompt resolves to a hidden path.",
-          );
-        }
-        const metadata = await stat(target);
+        const { metadata } = result;
         if (metadata.isDirectory()) {
           await scan(child, new Set([...parents, canonical]));
         } else if (

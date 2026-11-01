@@ -1,5 +1,6 @@
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
+import { mapBounded } from "./bounded-map.ts";
 import {
   type DiscoveryContext,
   type PromptInventory,
@@ -66,20 +67,23 @@ async function readSource(
   }
 }
 
-export async function verifyReads(files: PromptDependency[]): Promise<void> {
-  for (const file of files) {
-    if ((await realpath(file.path)) !== file.canonicalPath) {
-      throw new SettingsError(
-        `Prompt input changed: ${file.path}. Retry composition.`,
-      );
-    }
-    const current = await readSource(file.canonicalPath);
-    if (current.text !== file.text || current.mode !== file.mode) {
-      throw new SettingsError(
-        `Prompt input changed: ${file.path}. Retry composition.`,
-      );
-    }
+async function verifyRead(file: PromptDependency): Promise<void> {
+  if ((await realpath(file.path)) !== file.canonicalPath) {
+    throw new SettingsError(
+      `Prompt input changed: ${file.path}. Retry composition.`,
+    );
   }
+  const current = await readSource(file.canonicalPath);
+  if (current.text !== file.text || current.mode !== file.mode) {
+    throw new SettingsError(
+      `Prompt input changed: ${file.path}. Retry composition.`,
+    );
+  }
+}
+
+/** Re-reads sources with bounded open handles and reports the first change in input order. */
+export async function verifyReads(files: PromptDependency[]): Promise<void> {
+  await mapBounded(files, verifyRead);
 }
 
 export async function verifyInventory(

@@ -293,6 +293,12 @@ for (const mutation of ["edit", "add"] as const) {
     const f = await fixture(t);
     const body = join(f.directory, "body.md");
     await writeFile(body, "Startup");
+    // Other snippets keep discovery and verification concurrent around the change.
+    for (let index = 0; index < 40; index++) {
+      const directory = join(f.directory, `area-${index % 8}`);
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, `${index}.md`), `Snippet ${index}`);
+    }
     const canonicalBody = await fs.realpath(body);
     const open = fs.open;
     let changed = false;
@@ -331,15 +337,20 @@ test(
   { skip: process.platform === "win32" },
   async (t) => {
     const f = await fixture(t);
+    // Spread the library over nested directories so both discovery walks and
+    // both read passes run under the descriptor limit.
     for (let index = 0; index < 800; index++) {
-      await writeFile(join(f.directory, `${index}.md`), `Snippet ${index}`);
+      const directory = join(f.directory, `${index % 8}`, `${index % 5}`);
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, `${index}.md`), `Snippet ${index}`);
     }
     const script = `import assert from 'node:assert/strict';
 import server from ${JSON.stringify(new URL("../src/server.ts", import.meta.url).href)};
 const hooks = await server.server({ directory: process.argv[1], worktree: process.argv[1] });
 await hooks.config({});
 for (let index = 0; index < 800; index++) {
-  const config = { command: { check: { template: '{{include:' + index + '.md}}' } } };
+  const reference = (index % 8) + '/' + (index % 5) + '/' + index + '.md';
+  const config = { command: { check: { template: '{{include:' + reference + '}}' } } };
   await hooks.config(config);
   assert.equal(config.command.check.template, 'Snippet ' + index);
 }`;
