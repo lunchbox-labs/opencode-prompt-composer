@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs, { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, sep } from "node:path";
 import { type TestContext, test } from "node:test";
 import { discoverPrompts } from "../src/discovery.ts";
 
@@ -254,3 +254,49 @@ test(
     );
   },
 );
+
+test("discovery resolves a bounded number of entries at a time and stops at the entry limit", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "prompt-discovery-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const project = join(root, "project");
+  const prompts = join(project, ".opencode/prompts");
+  // Each enclosing directory lists its subdirectory first, ahead of many
+  // files, and the innermost directory alone exceeds the entry limit.
+  const middle = join(prompts, "0");
+  const inner = join(middle, "0");
+  await mkdir(inner, { recursive: true });
+  const files = [
+    ...[prompts, middle].flatMap((directory) =>
+      Array.from({ length: 100 }, (_, index) =>
+        join(directory, `${index + 1}.md`),
+      ),
+    ),
+    ...Array.from({ length: 4100 }, (_, index) => join(inner, `${index}.md`)),
+  ];
+  for (let index = 0; index < files.length; index += 256) {
+    await Promise.all(
+      files.slice(index, index + 256).map((file) => writeFile(file, "prompt")),
+    );
+  }
+  const trace = traceLookups(t);
+  await assert.rejects(
+    discoverPrompts(
+      { directory: project, worktree: project },
+      {
+        XDG_CONFIG_HOME: join(root, "config"),
+        OPENCODE_TEST_HOME: join(root, "home"),
+      },
+    ),
+    /exceeds 4096 entries/,
+  );
+  assert.ok(trace.peak <= 16, `peak ${trace.peak}`);
+  const looked = new Set(
+    trace.paths.filter((path) => path.startsWith(prompts + sep)),
+  );
+  // Past the limit, each enclosing directory has looked up only the rest of
+  // the batch that held its subdirectory.
+  assert.ok(
+    looked.size <= 4096 + 2 * (16 - 1),
+    `looked up ${looked.size} entries`,
+  );
+});

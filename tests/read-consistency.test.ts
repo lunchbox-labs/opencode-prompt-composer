@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {
+import fs, {
   chmod,
   mkdir,
   mkdtemp,
@@ -8,9 +8,11 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
+import { setTimeout } from "node:timers/promises";
 import { type PromptInventory, discoverPrompts } from "../src/discovery.ts";
 import { type PromptDependency, expandIncludes } from "../src/includes.ts";
 import { verifyInventory, verifyReads } from "../src/read-consistency.ts";
@@ -112,27 +114,40 @@ test("final reads accept the source byte limit and reject growth beyond it", asy
   );
 });
 
-test("final reads report the first changed source in input order", async (t) => {
+test("verification reports the first changed source in input order", async (t) => {
   const f = await fixture(t);
-  const names = Array.from({ length: 40 }, (_, index) => `${index}.md`);
+  const prompts = join(f.root, ".opencode/prompts");
+  const names = ["first.md", "second.md", "third.md"];
   for (const name of names) {
-    await writeFile(join(f.root, ".opencode/prompts", name), "Original");
+    await writeFile(join(prompts, name), "Original");
   }
+  const inventory = await discoverPrompts(f.context);
   const reads: PromptDependency[] = [];
   await expandIncludes(
     names.map((name) => `{{include:${name}}}`).join(" "),
-    (await discoverPrompts(f.context)).files,
+    inventory.files,
     (source) => reads.push(source),
   );
-  // Later deletions fail faster than the earlier same-size edit is detected.
-  await writeFile(join(f.root, ".opencode/prompts/3.md"), "Modified");
-  for (const name of names.slice(4)) {
-    await rm(join(f.root, ".opencode/prompts", name));
-  }
+  const [first, , third] = reads;
+  await writeFile(first.path, "Changed");
+  await writeFile(third.path, "Changed");
+  // The first changed source finishes verifying after the third one fails.
+  const open = fs.open;
+  t.mock.method(fs, "open", async (...args: Parameters<typeof open>) => {
+    if (args[0] === first.canonicalPath) {
+      await setTimeout(50);
+    }
+    return open(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
   await assert.rejects(verifyReads(reads), (error: Error) => {
     assert.equal(
       error.message,
-      `Prompt input changed: ${join(f.root, ".opencode/prompts/3.md")}. Retry composition.`,
+      `Prompt input changed: ${first.path}. Retry composition.`,
     );
     return true;
   });
