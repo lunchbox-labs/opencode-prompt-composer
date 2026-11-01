@@ -1,4 +1,5 @@
 import { SettingsError } from "./errors.ts";
+import { hasIncludeMarker } from "./include-core.ts";
 
 const END = "\n</skill_files>\n</skill_content>";
 const UNKNOWN_FRAMING =
@@ -26,7 +27,7 @@ export async function expandSkillBody(
       "The skill output was truncated before composition. Reduce its size and load it again.",
     );
   }
-  if (!output.includes("{{include:")) {
+  if (!hasIncludeMarker(output)) {
     return output;
   }
   const unchanged = (reason: string): string => {
@@ -96,7 +97,7 @@ export async function expandSkillBody(
     return unchanged(UNKNOWN_FRAMING);
   }
   const body = output.slice(prefix.length, boundary);
-  if (!body.includes("{{include:")) {
+  if (!hasIncludeMarker(body)) {
     return output;
   }
   return (

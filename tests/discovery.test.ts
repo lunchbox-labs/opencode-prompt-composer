@@ -114,6 +114,28 @@ test("deduplicates repeated roots and respects worktree traversal boundary", asy
   );
 });
 
+test("keeps non-regular prompt names only where no root has a regular file", async (t) => {
+  const f = await fixture(t);
+  // A later directory named like a prompt does not shadow an earlier file.
+  await rm(join(f.custom, "prompts/review/evidence.md"));
+  await mkdir(join(f.custom, "prompts/review/evidence.md"));
+  await mkdir(join(f.global, "prompts/personal/review.md"), {
+    recursive: true,
+  });
+  const result = await discoverPrompts(
+    { directory: f.nested, worktree: f.project },
+    f.env,
+  );
+  assert.equal(
+    result.files.get("review/evidence.md")?.path,
+    join(f.home, ".opencode/prompts/review/evidence.md"),
+  );
+  assert.equal(
+    result.files.get("personal/review.md")?.path,
+    join(f.global, "prompts/personal/review.md"),
+  );
+});
+
 test("preserves nested relative names, ignores unsupported/hidden files, rejects escaping symlinks", async (t) => {
   const f = await fixture(t);
   await writeFile(join(f.global, "prompts/review/evidence.txt"), "Text");

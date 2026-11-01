@@ -30,12 +30,15 @@ test("review example authors its complete guidance in the original order", async
       readFile(resolve(root, `.opencode/prompts/review/${name}.md`), "utf8"),
     ),
   );
-  // Keep the authored prose live while independently specifying both insertion
-  // sites. Comparing the complete body protects ordering and surrounding text.
+  // Keep the authored prose live while independently specifying each insertion
+  // site. Comparing the complete body protects ordering and surrounding text.
+  // Without a personal snippet in any prompts directory, its hook adds nothing.
   assert.ok(body.includes("{{include:review/context.md}}"));
   assert.ok(body.includes("{{include:review/findings.md}}"));
+  assert.ok(body.includes("{{include?:personal/review.md}}"));
   const expected = body
     .replace("{{include:review/context.md}}", () => context.trim())
-    .replace("{{include:review/findings.md}}", () => findings.trim());
+    .replace("{{include:review/findings.md}}", () => findings.trim())
+    .replace("{{include?:personal/review.md}}", "");
   assert.equal(result.agent!.review!.prompt, expected);
 });

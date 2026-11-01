@@ -2,7 +2,6 @@ import type { DiscoveredPrompt } from "./discovery.ts";
 import {
   type PromptRead,
   expandWithReader,
-  missingSnippet,
   readSnippet,
 } from "./include-core.ts";
 
@@ -25,10 +24,9 @@ export async function expandIncludes(
     text,
     (reference) => {
       const source = sources.get(reference);
-      if (source === undefined) {
-        throw missingSnippet(reference);
-      }
-      return readSnippet(reference, source, onRead);
+      return source === undefined
+        ? Promise.resolve(undefined)
+        : readSnippet(reference, source, onRead);
     },
     consumer,
   );

@@ -8,7 +8,6 @@ import {
 import {
   type PromptDependency,
   expandWithReader,
-  missingSnippet,
   readSnippet,
 } from "./include-core.ts";
 import {
@@ -62,7 +61,7 @@ async function capture(
       (reference) => {
         const entry = captured.get(reference);
         if (entry === undefined) {
-          throw missingSnippet(reference);
+          return Promise.resolve(undefined);
         }
         if ("error" in entry) {
           throw entry.error;

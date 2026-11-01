@@ -23,6 +23,11 @@ export interface DiscoveredPrompt {
 }
 export interface PromptInventory {
   directories: string[];
+  /**
+   * Winning prompts by relative path. A `.md` or `.txt` name that is not a
+   * regular file is kept when no root has a regular file at that path, so
+   * reading it fails as invalid instead of being treated as absent.
+   */
   files: Map<string, DiscoveredPrompt>;
 }
 type Lookup = { metadata: Stats } | { error: unknown };
@@ -111,6 +116,7 @@ export async function discoverPrompts(
 ): Promise<PromptInventory> {
   const directories = await discoveryDirectories(context, environment);
   const files = new Map<string, DiscoveredPrompt>();
+  const invalid = new Map<string, DiscoveredPrompt>();
   let entries = 0;
   for (const directory of directories) {
     const root = join(directory, "prompts");
@@ -187,23 +193,26 @@ export async function discoverPrompts(
             throw result.error;
           }
           const child = join(path, name);
-          if (result.metadata.isDirectory()) {
-            await scan(child, new Set([...parents, canonical]));
-          } else if (
-            result.metadata.isFile() &&
-            [".md", ".txt"].includes(extname(name).toLowerCase())
-          ) {
+          if ([".md", ".txt"].includes(extname(name).toLowerCase())) {
             const reference = relative(root, child).split(sep).join("/");
-            files.set(reference, {
+            (result.metadata.isFile() ? files : invalid).set(reference, {
               path: child,
               root,
               relativePath: reference,
             });
           }
+          if (result.metadata.isDirectory()) {
+            await scan(child, new Set([...parents, canonical]));
+          }
         }
       }
     }
     await scan(root, new Set());
+  }
+  for (const [name, prompt] of invalid) {
+    if (!files.has(name)) {
+      files.set(name, prompt);
+    }
   }
   return { directories, files };
 }

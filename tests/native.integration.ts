@@ -175,6 +175,7 @@ test(
       join(project, ".opencode/commands"),
       join(project, ".opencode/skills/evidence"),
       join(shared, "prompts/review"),
+      join(shared, "prompts/personal"),
     ]) {
       await mkdir(path, { recursive: true });
     }
@@ -196,8 +197,12 @@ test(
       "Global original",
     );
     const agentPath = join(project, ".opencode/agents/review.md");
-    const agentText =
-      "---\ndescription: Review changes\nmode: primary\n---\nUse evidence.\n\nReview {{include:review/body.md}}\n\nState uncertainty.";
+    // The project agent offers optional personal guidance from the global
+    // prompts directory. The snippet is added only before the host restarts.
+    const personalPath = join(shared, "prompts/personal/review.md");
+    const agentBody =
+      "Use evidence.\n\nReview {{include:review/body.md}}\n\nState uncertainty.\n{{include?:personal/review.md}}";
+    const agentText = `---\ndescription: Review changes\nmode: primary\n---\n${agentBody}`;
     await writeFile(agentPath, agentText);
     const helperPath = join(project, ".opencode/agents/helper.md");
     const helperText =
@@ -513,7 +518,7 @@ test(
     );
     assert.equal(
       config.agent.review.prompt,
-      "Use evidence.\n\nReview Project evidence\n\nState uncertainty.",
+      "Use evidence.\n\nReview Project evidence\n\nState uncertainty.\n",
       logs,
     );
     assert.equal(
@@ -674,11 +679,11 @@ test(
     const reloaded = await disposeInstance(
       (current) =>
         current.agent.review.prompt ===
-        "Use native changes.\n\nReview Project evidence\n\nState uncertainty.",
+        "Use native changes.\n\nReview Project evidence\n\nState uncertainty.\n",
     );
     assert.equal(
       reloaded.agent.review.prompt,
-      "Use native changes.\n\nReview Project evidence\n\nState uncertainty.",
+      "Use native changes.\n\nReview Project evidence\n\nState uncertainty.\n",
     );
     assert.equal(
       reloaded.command.check.template,
@@ -778,6 +783,7 @@ test(
       JSON.stringify({ plugin: [npmPlugin] }),
     );
     await writeFile(agentPath, agentText);
+    await writeFile(personalPath, "  Personal review guidance.\n");
     const restartedSkillText = changedSkillText.replace(
       "{{include:review/deleted.txt}}\n",
       "",
@@ -790,7 +796,7 @@ test(
     const restarted = (await api("/config")) as typeof config;
     assert.equal(
       restarted.agent.review.prompt,
-      "Use evidence.\n\nReview Project updated\n\nState uncertainty.",
+      "Use evidence.\n\nReview Project updated\n\nState uncertainty.\nPersonal review guidance.",
     );
     assert.equal(
       restarted.command.check.template,
@@ -845,5 +851,18 @@ test(
     assert.equal(await readFile(helperPath, "utf8"), helperText);
     assert.equal(await readFile(buildPath, "utf8"), buildText);
     assert.equal(await readFile(obsoletePath, "utf8"), obsoleteText);
+
+    // A present optional snippet that cannot be read as UTF-8 text fails the
+    // whole composition instead of expanding to nothing.
+    await writeFile(personalPath, Buffer.from([0xff]));
+    await stopHost();
+    await startHost();
+    const unreadable = (await api("/config")) as typeof config;
+    assert.equal(unreadable.agent.review.prompt, agentBody, logs);
+    // The host log escapes quotes inside the reported reason.
+    assert.match(
+      logs,
+      /Could not read prompt include \\?"personal\/review\.md\\?"/,
+    );
   },
 );

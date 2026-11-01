@@ -9,7 +9,10 @@ export const MAX_PROMPT_BYTES = 256 * 1024;
 export const MAX_INCLUDE_DEPTH = 32;
 export const MAX_INCLUDES = 256;
 
-const INCLUDE = /\\?\{\{include:([^{}]*)\}\}|\\?\{\{include:/g;
+// "{{include?:" marks an optional include. The second alternative catches
+// unterminated markers of either form.
+const INCLUDE = /\\?\{\{include\??:([^{}]*)\}\}|\\?\{\{include\??:/g;
+const MARKER = /\{\{include\??:/;
 
 export interface PromptDependency {
   path: string;
@@ -18,9 +21,13 @@ export interface PromptDependency {
   mode: number;
 }
 export type PromptRead = (dependency: PromptDependency) => void;
+/** Resolves undefined only when no discovered prompts directory contains the reference. */
+export type SnippetReader = (
+  reference: string,
+) => Promise<PromptDependency | undefined>;
 
 interface Expansion {
-  read: (reference: string) => Promise<PromptDependency>;
+  read: SnippetReader;
   includes: number;
   consumer?: string;
 }
@@ -139,22 +146,33 @@ export async function readSnippet(
   }
 }
 
-export function missingSnippet(reference: string): SettingsError {
-  return new SettingsError(
-    `Prompt ${diagnosticName(reference)} does not exist in the discovered prompts directories.`,
-  );
+/** Whether text contains a required or optional include marker, escaped or not. */
+export function hasIncludeMarker(text: string): boolean {
+  return MARKER.test(text);
 }
 
 async function snippet(
   reference: string,
   context: Expansion,
-): Promise<{ text: string; path: string; sourceText: string; offset: number }> {
+  optional: boolean,
+): Promise<
+  { text: string; path: string; sourceText: string; offset: number } | undefined
+> {
   if (!safeSnippetPath(reference)) {
     throw new SettingsError(
       "Prompt includes require a safe relative .md or .txt file path.",
     );
   }
   const source = await context.read(reference);
+  if (source === undefined) {
+    // Only absence is optional; every read or validation failure still throws.
+    if (optional) {
+      return undefined;
+    }
+    throw new SettingsError(
+      `Prompt ${diagnosticName(reference)} does not exist in the discovered prompts directories.`,
+    );
+  }
   return {
     text: source.text.trim(),
     path: source.canonicalPath,
@@ -203,10 +221,11 @@ async function expand(
       if (marker.startsWith("\\")) {
         append(marker.slice(1));
       } else {
+        const optional = marker.startsWith("{{include?");
         reference = match.at(1);
         if (reference === undefined) {
           throw new SettingsError(
-            "A prompt include has invalid syntax. Use {{include:folder/prompt.md}}.",
+            `A prompt include has invalid syntax. Use {{include${optional ? "?" : ""}:folder/prompt.md}}.`,
           );
         }
         context.includes += 1;
@@ -218,20 +237,22 @@ async function expand(
             "The prompt include count or nesting limit was exceeded.",
           );
         }
-        const included = await snippet(reference, context);
-        if (stack.some((frame) => frame.path === included.path)) {
-          throw new SettingsError(
-            "The prompt includes contain a cycle. Remove the recursive include.",
+        const included = await snippet(reference, context, optional);
+        if (included !== undefined) {
+          if (stack.some((frame) => frame.path === included.path)) {
+            throw new SettingsError(
+              "The prompt includes contain a cycle. Remove the recursive include.",
+            );
+          }
+          append(
+            await expand(
+              included.text,
+              context,
+              [...stack, { path: included.path, reference }],
+              included,
+            ),
           );
         }
-        append(
-          await expand(
-            included.text,
-            context,
-            [...stack, { path: included.path, reference }],
-            included,
-          ),
-        );
       }
       promptSize(resultBytes);
       cursor = match.index + marker.length;
@@ -269,10 +290,10 @@ async function expand(
 
 export async function expandWithReader(
   text: string,
-  read: (reference: string) => Promise<PromptDependency>,
+  read: SnippetReader,
   consumer?: string,
 ): Promise<string> {
-  if (!text.includes("{{include:")) {
+  if (!hasIncludeMarker(text)) {
     return text;
   }
   return expand(text, { read, includes: 0, consumer }, []);
