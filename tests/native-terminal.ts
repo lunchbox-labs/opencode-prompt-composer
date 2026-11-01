@@ -5,6 +5,26 @@ import { promisify } from "node:util";
 import * as pty from "node-pty";
 import headless from "@xterm/headless";
 
+const outline = [
+  "Read the whole outline before reviewing any individual step, then confirm each step with evidence.",
+  ...Array.from(
+    { length: 150 },
+    (_, index) =>
+      `Outline step ${String(index + 1).padStart(3, "0")}: check the change and record evidence.`,
+  ),
+  "End of outline.",
+];
+const archive = Array.from(
+  { length: 1100 },
+  (_, index) =>
+    `Archive entry ${String(index + 1).padStart(4, "0")}: retained reference text for bounded viewing.`,
+);
+/** Command files whose loaded text needs scrolling, or bounded parts when oversized. */
+export const viewerCommands = {
+  "outline.md": `---\ndescription: Long outline\n---\n${outline.join("\n")}`,
+  "archive.md": `---\ndescription: Oversized archive\n---\n${archive.join("\n")}`,
+};
+
 /** Real Unix PTY / Windows ConPTY with an actual reconstructed terminal screen. */
 export function nativeTerminal(options: {
   binary: string;
@@ -211,6 +231,10 @@ export function nativeTerminal(options: {
     selected,
     promptFocused,
     write: (data: string) => child.write(data),
+    resize(cols: number, rows: number) {
+      screen.resize(cols, rows);
+      child.resize(cols, rows);
+    },
     stop,
   };
 }
@@ -297,16 +321,97 @@ export async function exerciseNativeTerminal(options: {
         `Agent: ${options.builtin} (built-in)`,
       );
     };
+    const viewerHint = "↑/↓ scroll · pgup/pgdn page · home/end · esc back";
+    const back = async (...parent: string[]) => {
+      terminal.write("\x1b");
+      await terminal.waitFor(
+        () => !terminal.text().includes("↑/↓ scroll"),
+        "closed viewer",
+      );
+      await terminal.wait(...parent);
+    };
+    const steps = () =>
+      Array.from(terminal.text().matchAll(/Outline step (\d{3}):/g), (match) =>
+        Number(match[1]),
+      );
+    const scrolled = async (
+      key: string,
+      ready: (shown: number[]) => boolean,
+    ) => {
+      terminal.write(key);
+      await terminal.waitFor(
+        () => ready(steps()),
+        `outline after ${JSON.stringify(key)}`,
+      );
+    };
+    const outlineViewer = async () => {
+      await select("Command: outline", viewerHint);
+      await terminal.wait("Command: outline", "Outline step 001:");
+      // The extra-large dialog keeps this sentence on a single row.
+      assert.ok(
+        terminal
+          .text()
+          .split("\n")
+          .some((row) => row.includes(outline[0])),
+        terminal.text(),
+      );
+      assert.ok(!steps().includes(150), "Long text must scroll");
+    };
     await open();
     terminal.write("\x1b[B\r");
     await terminal.wait("Loaded command templates");
-    await select("Command: check", "Command: check — pages");
-    await select("Page 1 of 1", "Command: check — page 1/1");
+    await select("Command: check", viewerHint);
     await terminal.wait(
+      "Command: check",
       "Check Project updated $ARGUMENTS {{include:literal.md}}",
     );
-    terminal.write("\x1b");
-    await terminal.wait("Command: check — pages");
+    await back("Loaded command templates");
+    await outlineViewer();
+    const top = steps().length;
+    await scrolled("\x1b[B", (shown) => shown.length > 0 && shown[0] > 1);
+    const down = steps()[0];
+    await scrolled("\x1b[6~", (shown) => shown.length > 0 && shown[0] > down);
+    await scrolled("\x1b[F", (shown) => shown.includes(150));
+    await terminal.wait("End of outline.");
+    await scrolled("\x1b[5~", (shown) => !shown.includes(150));
+    await scrolled("\x1b[H", (shown) => shown[0] === 1);
+    // The viewer refits below the dialog's top offset as the terminal shrinks and grows.
+    terminal.resize(120, 30);
+    await terminal.waitFor(() => {
+      const rows = terminal.text().split("\n");
+      const hint = rows.findIndex((row) => row.includes(viewerHint));
+      const shown = steps();
+      return (
+        hint > 0 &&
+        hint < rows.length - 1 &&
+        shown.length > 0 &&
+        shown.length < top &&
+        shown[0] === 1
+      );
+    }, "viewer fitted to a smaller terminal");
+    await scrolled("\x1b[F", (shown) => shown.includes(150));
+    terminal.resize(180, 55);
+    await terminal.waitFor(
+      () => steps().length === top && steps().includes(150),
+      "viewer fitted to a larger terminal",
+    );
+    await back("Loaded command templates");
+    // Each opening starts from the top with a fresh viewer.
+    for (let opened = 0; opened < 2; opened++) {
+      await outlineViewer();
+      await scrolled("\x1b[F", (shown) => shown.includes(150));
+      await back("Loaded command templates");
+    }
+    await select("Command: archive", "Command: archive — parts");
+    await terminal.wait("Part 1 of 2", "Part 2 of 2");
+    await select("Part 2 of 2", viewerHint);
+    await terminal.wait("Command: archive — part 2/2");
+    terminal.write("\x1b[F");
+    await terminal.wait("Archive entry 1100:");
+    await back("Command: archive — parts");
+    await select("Part 1 of 2", viewerHint);
+    await terminal.wait("Command: archive — part 1/2", "Archive entry 0001:");
+    await back("Command: archive — parts");
     terminal.write("\x1b");
     await terminal.wait("Loaded command templates");
     terminal.write("\x1b");
@@ -316,19 +421,13 @@ export async function exerciseNativeTerminal(options: {
     await showBuiltins();
     await select("Hide built-in agents", "Loaded agent prompts");
     await hiddenBuiltins();
-    await select("Agent: build", "Agent: build — pages");
-    await select("Page 1 of 1", "Agent: build — page 1/1");
+    await select("Agent: build", viewerHint);
     await terminal.wait("Build override Project updated");
-    terminal.write("\x1b");
-    await terminal.wait("Agent: build — pages");
-    terminal.write("\x1b");
+    await back("Loaded agent prompts");
     await hiddenBuiltins();
-    await select("Agent: review", "Agent: review — pages");
-    await select("Page 1 of 1", "Agent: review — page 1/1");
+    await select("Agent: review", viewerHint);
     await terminal.wait("Review Project updated", "State uncertainty.");
-    terminal.write("\x1b");
-    await terminal.wait("Agent: review — pages");
-    terminal.write("\x1b");
+    await back("Loaded agent prompts");
     await hiddenBuiltins();
     await showBuiltins();
     terminal.write("\x1b");

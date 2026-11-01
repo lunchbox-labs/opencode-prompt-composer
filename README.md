@@ -44,7 +44,7 @@ Prompt files live in `prompts/` under OpenCode's configuration directories. Late
 
 Skill bodies expand through the native `skill` tool; automatically generated skill slash commands do not expand includes.
 
-Run `/view-prompts`, choose Agents or Commands, then select a component to read its complete loaded text. Configured agents are shown by default; use **Show built-in agents** to include native defaults. Skill composition is supported, but the viewer omits skills due to API limitations.
+Run `/view-prompts`, choose Agents or Commands, then select a component to read its complete loaded text in a scrollable viewer. Text longer than 65,536 characters, or with a line longer than 4,096 characters, opens as a list of parts. Configured agents are shown by default; use **Show built-in agents** to include native defaults. Skill composition is supported, but the viewer omits skills due to API limitations.
 
 Prompt snippets are captured when the project loads. Restart the OpenCode server after editing snippets or native prompt definitions.
 
