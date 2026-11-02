@@ -10,11 +10,8 @@ import {
   expandWithReader,
   readSnippet,
 } from "./include-core.ts";
-import {
-  mapBounded,
-  verifyInventory,
-  verifyReads,
-} from "./read-consistency.ts";
+import { mapBounded } from "./bounded.ts";
+import { verifyInventory, verifyReads } from "./read-consistency.ts";
 
 type Expand = (text: string, consumer: string) => Promise<string>;
 type Captured = { source: PromptDependency } | { error: unknown };
@@ -52,9 +49,18 @@ async function capture(
       reads.push(entry.source);
     }
   }
-  // Detect edits to early reads and discovery changes before publishing.
-  await verifyReads(reads);
-  await verifyInventory(context, inventory, environment);
+  // Detect edits to early reads and discovery changes before publishing. Both
+  // checks only read, so they run together; together they hold at most twice
+  // the descriptors of either one. An edited read is still reported before a
+  // discovery change, as checking in sequence would.
+  for (const check of await Promise.allSettled([
+    verifyReads(reads),
+    verifyInventory(context, inventory, environment),
+  ])) {
+    if (check.status === "rejected") {
+      throw check.reason;
+    }
+  }
   return (text, consumer) =>
     expandWithReader(
       text,

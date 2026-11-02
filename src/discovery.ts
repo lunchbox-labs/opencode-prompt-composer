@@ -10,6 +10,7 @@ import {
   resolve,
   sep,
 } from "node:path";
+import { mapBounded } from "./bounded.ts";
 import { SettingsError } from "./errors.ts";
 
 export interface DiscoveryContext {
@@ -74,7 +75,8 @@ export async function discoveryDirectories(
     xdg !== undefined && isAbsolute(xdg) ? xdg : join(homedir(), ".config"),
     "opencode",
   );
-  const directories = [global];
+  const ancestors: string[] = [];
+  let limited = false;
   if (projectDiscoveryEnabled(environment)) {
     const stop =
       context.worktree === "/" ? undefined : resolve(context.worktree);
@@ -84,21 +86,32 @@ export async function discoveryDirectories(
       current = dirname(current), count++
     ) {
       if (count >= 256) {
-        throw new SettingsError(
-          "Prompt discovery exceeds the ancestor-directory limit.",
-        );
+        limited = true;
+        break;
       }
-      const directory = join(current, ".opencode");
-      if (await pathExists(directory)) {
-        directories.push(directory);
-      }
+      ancestors.push(join(current, ".opencode"));
       if (current === stop || dirname(current) === current) {
         break;
       }
     }
   }
   const home = join(environment.OPENCODE_TEST_HOME ?? homedir(), ".opencode");
-  if (await pathExists(home)) {
+  // The existence checks are independent. Run them together; the earliest
+  // failure in path order is reported, as checking in sequence would.
+  const present = await mapBounded(
+    limited ? ancestors : [...ancestors, home],
+    pathExists,
+  );
+  if (limited) {
+    throw new SettingsError(
+      "Prompt discovery exceeds the ancestor-directory limit.",
+    );
+  }
+  const directories = [
+    global,
+    ...ancestors.filter((_, index) => present[index]),
+  ];
+  if (present[ancestors.length]) {
     directories.push(home);
   }
   if (

@@ -4,7 +4,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, join, sep } from "node:path";
 import { type TestContext, test } from "node:test";
-import { discoverPrompts } from "../src/discovery.ts";
+import { discoverPrompts, discoveryDirectories } from "../src/discovery.ts";
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "prompt-discovery-"));
@@ -320,5 +320,53 @@ test("discovery resolves a bounded number of entries at a time and stops at the 
   assert.ok(
     looked.size <= 4096 + 2 * (16 - 1),
     `looked up ${looked.size} entries`,
+  );
+});
+
+test("checks ancestor roots together, keeping root order and the first failure in path order", async () => {
+  const environment = {
+    XDG_CONFIG_HOME: "/config",
+    OPENCODE_TEST_HOME: "/home",
+  };
+  const context = { directory: "/work/a/b", worktree: "/work" };
+  const started: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const sequential = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("root checks ran one at a time")), 500),
+  );
+  sequential.catch(() => undefined);
+  // Every check starts before any completes; later roots answer first.
+  const present = async (path: string): Promise<boolean> => {
+    started.push(path);
+    if (started.length === 4) {
+      release();
+    }
+    await Promise.race([gate, sequential]);
+    await new Promise((resolve) =>
+      setTimeout(resolve, 10 - started.indexOf(path)),
+    );
+    return path !== "/work/a/.opencode";
+  };
+  assert.deepEqual(await discoveryDirectories(context, environment, present), [
+    "/config/opencode",
+    "/work/a/b/.opencode",
+    "/work/.opencode",
+    "/home/.opencode",
+  ]);
+
+  const failing = async (path: string): Promise<boolean> => {
+    // The later root fails first; the earlier root's failure is still reported.
+    await new Promise((resolve) =>
+      setTimeout(resolve, path === "/work/a/b/.opencode" ? 20 : 0),
+    );
+    if (path === "/work/a/b/.opencode" || path === "/home/.opencode") {
+      throw new Error(`denied ${path}`);
+    }
+    return true;
+  };
+  await assert.rejects(
+    discoveryDirectories(context, environment, failing),
+    /denied \/work\/a\/b\/\.opencode/,
   );
 });
