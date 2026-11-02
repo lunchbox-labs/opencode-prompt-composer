@@ -15,6 +15,6 @@ Write documentation for knowledgeable OpenCode users: explain plugin-specific co
 
 ## Contributor workflows
 
-For authoring, diagnostics, examples, viewer or restart behavior changes, request an independent `opencode-user-review`. For discovery, include expansion, native prompt ownership or skill-body changes, request an independent `composition-contract-review`. Use both when both areas change; skip unrelated roles. Give reviewers the diff/base and relevant test or runtime evidence, then address supported findings before handoff.
+For authoring, diagnostics, examples, viewer or restart behavior changes, request an independent `opencode-user-review`. For discovery, include expansion, native prompt ownership, skill-body or host integration changes, request an independent `composition-contract-review`. Use both when both areas change; skip unrelated roles. Give reviewers the diff/base and relevant test or runtime evidence.
 
 Use `.agents/skills/native-package-verification/SKILL.md` for applicable package/native checks. These contributor workflows do not require the plugin or alter the shipped examples. The [agent tooling conventions](https://github.com/lunchbox-labs/.github/blob/main/agent-guidance/agent-tooling.md) cover the file layout, invocation in each tool and reviewer permissions.
