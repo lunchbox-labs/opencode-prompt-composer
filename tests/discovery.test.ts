@@ -333,7 +333,10 @@ test("checks ancestor roots together, keeping root order and the first failure i
   let release!: () => void;
   const gate = new Promise<void>((resolve) => (release = resolve));
   const sequential = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error("root checks ran one at a time")), 500),
+    setTimeout(
+      () => reject(new Error("root checks ran one at a time")),
+      500,
+    ).unref(),
   );
   sequential.catch(() => undefined);
   // Every check starts before any completes; later roots answer first.
@@ -368,5 +371,35 @@ test("checks ancestor roots together, keeping root order and the first failure i
   await assert.rejects(
     discoveryDirectories(context, environment, failing),
     /denied \/work\/a\/b\/\.opencode/,
+  );
+});
+
+test("reports the ancestor limit only after every checked ancestor succeeds", async () => {
+  const environment = {
+    XDG_CONFIG_HOME: "/config",
+    OPENCODE_TEST_HOME: "/home",
+  };
+  const directory = `/${Array.from({ length: 300 }, (_, index) => `d${index}`).join("/")}`;
+  const context = { directory, worktree: "/" };
+  const checked: string[] = [];
+  const present = (path: string): Promise<boolean> => {
+    checked.push(path);
+    return Promise.resolve(true);
+  };
+  await assert.rejects(
+    discoveryDirectories(context, environment, present),
+    /ancestor-directory limit/,
+  );
+  assert.equal(checked.length, 256);
+  assert.ok(!checked.includes("/home/.opencode"));
+
+  const last = checked[255];
+  const failing = (path: string): Promise<boolean> =>
+    path === last
+      ? Promise.reject(new Error(`denied ${path}`))
+      : Promise.resolve(true);
+  await assert.rejects(
+    discoveryDirectories(context, environment, failing),
+    (error) => error instanceof Error && error.message === `denied ${last}`,
   );
 });
