@@ -64,7 +64,7 @@ export function projectDiscoveryEnabled(
   );
 }
 
-/** Mirrors ConfigPaths.directories in OpenCode 1.19.0; environment is injectable for isolated tests. */
+/** Mirrors ConfigPaths.directories in OpenCode 1.19.0 through 1.19.5; environment is injectable for isolated tests. */
 export async function discoveryDirectories(
   context: DiscoveryContext,
   environment: NodeJS.ProcessEnv = process.env,

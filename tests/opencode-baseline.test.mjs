@@ -17,8 +17,8 @@ test("published package has no OpenCode engine gate and retains the Node require
 });
 
 test("release retains independently pinned SDK and plugin build dependencies", () => {
-  assert.equal(manifest.devDependencies["@opencode-ai/plugin"], "1.19.0");
-  assert.equal(manifest.devDependencies["@opencode-ai/sdk"], "1.19.0");
+  assert.equal(manifest.devDependencies["@opencode-ai/plugin"], "1.19.5");
+  assert.equal(manifest.devDependencies["@opencode-ai/sdk"], "1.19.5");
 });
 
 test("test-only host policy retains the range and floor independently of package engines", async () => {
