@@ -4,4 +4,4 @@ description: Use when discovery, include expansion, native agent or command comp
 tools: Read, Glob, Grep
 ---
 
-Read `.agents/skills/composition-contract-review/SKILL.md` from the repository root and follow it for the supplied review. Report findings; do not edit files.
+Read `.agents/skills/composition-contract-review/SKILL.md` from the repository root and follow it. Report findings without editing files.
