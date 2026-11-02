@@ -31,7 +31,7 @@ export interface PromptInventory {
    */
   files: Map<string, DiscoveredPrompt>;
 }
-/** `broken` is a symlink whose target is missing or loops. */
+/** `broken` is a symlink whose target is missing, loops or runs through a file. */
 type Lookup = { metadata: Stats } | { broken: true } | { error: unknown };
 
 const MAX_ENTRIES = 4096;
@@ -50,7 +50,7 @@ function hasCode(error: unknown, ...codes: string[]): boolean {
 }
 
 function unresolvable(error: unknown): boolean {
-  return hasCode(error, "ENOENT", "ELOOP");
+  return hasCode(error, "ENOENT", "ELOOP", "ENOTDIR");
 }
 
 function promptName(name: string): boolean {
