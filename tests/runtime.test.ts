@@ -423,6 +423,50 @@ test("toast failures cannot prevent unknown skill output from passing through", 
   }
 });
 
+test("config composition failures show one error toast and still reject without changes", async (t) => {
+  const { context } = await fixture(t);
+  const notices: {
+    body: { title: string; message: string; variant: string };
+  }[] = [];
+  const hooks = await server.server({
+    ...context,
+    client: {
+      tui: {
+        showToast: async (notice: (typeof notices)[number]) => {
+          notices.push(notice);
+        },
+      },
+    },
+  } as unknown as PluginInput);
+  const config: Config = {
+    agent: { review: { prompt: "{{include:missing.md}}" } },
+  };
+  const before = structuredClone(config);
+  await assert.rejects(hooks.config!(config), /does not exist/);
+  assert.deepEqual(config, before);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].body.title, "Prompt Composer");
+  assert.equal(notices[0].body.variant, "error");
+  assert.match(
+    notices[0].body.message,
+    /^Prompt composition failed\. .*does not exist/,
+  );
+
+  for (const showToast of [
+    () => {
+      throw new Error("Toast unavailable");
+    },
+    () => Promise.reject(new Error("Toast unavailable")),
+  ]) {
+    const quiet = await server.server({
+      ...context,
+      client: { tui: { showToast } },
+    } as unknown as PluginInput);
+    await assert.rejects(quiet.config!(config), /does not exist/);
+    assert.deepEqual(config, before);
+  }
+});
+
 test("config composition preserves plugin registration without publishing editor state", async (t) => {
   const { root } = await fixture(t);
   const hooks = await server.server({
