@@ -323,7 +323,7 @@ test("discovery resolves a bounded number of entries at a time and stops at the 
   );
 });
 
-test("checks ancestor roots together, keeping root order and the first failure in path order", async () => {
+test("checks ancestor roots together, keeping root order and the first failure in path order", async (t) => {
   const environment = {
     XDG_CONFIG_HOME: "/config",
     OPENCODE_TEST_HOME: "/home",
@@ -332,12 +332,14 @@ test("checks ancestor roots together, keeping root order and the first failure i
   const started: string[] = [];
   let release!: () => void;
   const gate = new Promise<void>((resolve) => (release = resolve));
-  const sequential = new Promise<never>((_, reject) =>
-    setTimeout(
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const sequential = new Promise<never>((_, reject) => {
+    timer = setTimeout(
       () => reject(new Error("root checks ran one at a time")),
       500,
-    ).unref(),
-  );
+    );
+  });
+  t.after(() => clearTimeout(timer));
   sequential.catch(() => undefined);
   // Every check starts before any completes; later roots answer first.
   const present = async (path: string): Promise<boolean> => {
