@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { validateRelease as validate } from "../scripts/validate-release.mjs";
+import { releaseCiState } from "../scripts/release-ci.mjs";
 
 const release = {
   name: "@lunchbox-labs/opencode-prompt-composer",
@@ -88,7 +89,7 @@ test("only stable published releases run verification before npm publication", a
   assert.equal(workflow["run-name"], undefined);
   assert.deepEqual(workflow.on, { release: { types: ["published"] } });
   assert.doesNotMatch(JSON.stringify(workflow), /inputs\./);
-  assert.deepEqual(Object.keys(workflow.jobs), ["verify", "publish"]);
+  assert.deepEqual(Object.keys(workflow.jobs), ["checks", "verify", "publish"]);
   assert.deepEqual(workflow.permissions, { contents: "read" });
   const { verify, publish } = workflow.jobs;
   assert.equal(verify.name, "Verify");
@@ -160,7 +161,14 @@ test("only stable published releases run verification before npm publication", a
       step.uses?.startsWith("actions/upload-artifact@"),
     ) > pack,
   );
-  assert.equal(publish.needs, "verify");
+  assert.deepEqual(publish.needs, ["checks", "verify"]);
+  const checks = workflow.jobs.checks;
+  assert.equal(checks.if, verify.if);
+  assert.deepEqual(checks.permissions, { contents: "read", actions: "read" });
+  const gate = checks.steps.find(
+    (step) => step.run === "node scripts/release-ci.mjs",
+  );
+  assert.equal(gate.env.REQUIRED_WORKFLOWS, "Check");
   assert.equal(publish.environment, "npm");
   assert.deepEqual(publish.permissions, {
     contents: "read",
@@ -219,4 +227,55 @@ test("publish workflow needs only read access and npm OIDC with no custom creden
       assert.equal(step.env?.GH_TOKEN, undefined);
     }
   }
+});
+
+test("release commit checks wait for the push Check run and accept only its latest success", () => {
+  const required = ["Check"];
+  const run = (
+    status,
+    conclusion,
+    created_at = "2026-11-01T22:40:00Z",
+    event = "push",
+  ) => ({
+    name: "Check",
+    status,
+    conclusion,
+    created_at,
+    event,
+  });
+  assert.equal(
+    releaseCiState([run("completed", "success")], required).state,
+    "success",
+  );
+  assert.equal(
+    releaseCiState([run("in_progress", null)], required).state,
+    "pending",
+  );
+  assert.equal(releaseCiState([], required).state, "pending");
+  assert.equal(
+    releaseCiState(
+      [run("completed", "success", undefined, "pull_request")],
+      required,
+    ).state,
+    "pending",
+  );
+  const failed = releaseCiState(
+    [
+      run("completed", "success"),
+      run("completed", "failure", "2026-11-01T22:45:00Z"),
+    ],
+    required,
+  );
+  assert.equal(failed.state, "failure");
+  assert.match(failed.detail, /Check \(failure\)/);
+  assert.equal(
+    releaseCiState(
+      [
+        run("completed", "failure"),
+        run("completed", "success", "2026-11-01T23:10:00Z"),
+      ],
+      required,
+    ).state,
+    "success",
+  );
 });
