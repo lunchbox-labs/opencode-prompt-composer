@@ -31,7 +31,8 @@ export interface PromptInventory {
    */
   files: Map<string, DiscoveredPrompt>;
 }
-type Lookup = { metadata: Stats } | { error: unknown };
+/** `broken` is a symlink whose target is missing or loops. */
+type Lookup = { metadata: Stats } | { broken: true } | { error: unknown };
 
 const MAX_ENTRIES = 4096;
 // Bounds how many child lookups run at once and how many run ahead of an
@@ -39,12 +40,29 @@ const MAX_ENTRIES = 4096;
 // descriptor, so in the plugin host this also bounds discovery's descriptors.
 const LOOKUP_BATCH = 16;
 
+function hasCode(error: unknown, ...codes: string[]): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    codes.includes(error.code)
+  );
+}
+
+function unresolvable(error: unknown): boolean {
+  return hasCode(error, "ENOENT", "ELOOP");
+}
+
+function promptName(name: string): boolean {
+  return [".md", ".txt"].includes(extname(name).toLowerCase());
+}
+
 async function exists(path: string): Promise<boolean> {
   try {
     await lstat(path);
     return true;
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+    if (hasCode(error, "ENOENT")) {
       return false;
     }
     throw error;
@@ -136,11 +154,47 @@ export async function discoverPrompts(
     if (!(await exists(root))) {
       continue;
     }
-    const canonicalRoot = await realpath(root);
+    let canonicalRoot: string;
+    try {
+      canonicalRoot = await realpath(root);
+    } catch (error) {
+      // A dangling or looping prompts link provides no prompts, like an absent one.
+      if (unresolvable(error)) {
+        continue;
+      }
+      throw error;
+    }
+    async function resolveChild(child: string): Promise<string | undefined> {
+      try {
+        return await realpath(child);
+      } catch (error) {
+        if (!unresolvable(error)) {
+          throw error;
+        }
+        let entry: Stats;
+        try {
+          entry = await lstat(child);
+        } catch (missing) {
+          if (hasCode(missing, "ENOENT")) {
+            throw new SettingsError(
+              `Prompt discovery changed: ${child}. Retry composition.`,
+            );
+          }
+          throw missing;
+        }
+        if (entry.isSymbolicLink()) {
+          return undefined;
+        }
+        throw error;
+      }
+    }
     // Resolve and check a child before stat so rejected targets are never inspected.
     async function lookup(child: string): Promise<Lookup> {
       try {
-        const target = await realpath(child);
+        const target = await resolveChild(child);
+        if (target === undefined) {
+          return { broken: true };
+        }
         if (!contained(canonicalRoot, target)) {
           throw new SettingsError(
             `A discovered prompt escapes its prompts directory: ${child}.`,
@@ -206,15 +260,18 @@ export async function discoverPrompts(
             throw result.error;
           }
           const child = join(path, name);
-          if ([".md", ".txt"].includes(extname(name).toLowerCase())) {
+          const metadata = "metadata" in result ? result.metadata : undefined;
+          // A broken symlink with a prompt name fails only when an include
+          // uses it, like other present names that are not regular files.
+          if (promptName(name)) {
             const reference = relative(root, child).split(sep).join("/");
-            (result.metadata.isFile() ? files : invalid).set(reference, {
+            (metadata?.isFile() === true ? files : invalid).set(reference, {
               path: child,
               root,
               relativePath: reference,
             });
           }
-          if (result.metadata.isDirectory()) {
+          if (metadata?.isDirectory() === true) {
             await scan(child, new Set([...parents, canonical]));
           }
         }

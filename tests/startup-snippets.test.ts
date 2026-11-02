@@ -224,6 +224,46 @@ test("includes fail for present prompt names that are not regular files", async 
   }
 });
 
+test(
+  "broken prompt symlinks fail only for includes that use them",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const f = await fixture(t);
+    await writeFile(join(f.directory, "body.md"), "Body");
+    await symlink(join(f.root, "missing.md"), join(f.directory, "dangling.md"));
+    await symlink(join(f.directory, "loop.md"), join(f.directory, "loop.md"));
+    await symlink(join(f.root, "missing"), join(f.directory, "notes"));
+    const hooks = await server.server(f.context);
+    const current = config();
+    await hooks.config!(current);
+    assert.equal(current.agent!.review!.prompt, "Review Body");
+    const output = skill("{{include:body.md}}");
+    await hooks["tool.execute.after"]!(skillInput, output);
+    assert.equal(output.output, skill("Body").output);
+    for (const name of ["dangling.md", "loop.md"]) {
+      const unreadable = new RegExp(
+        `Could not read prompt include "${name.replace(".", "\\.")}"\\. Check`,
+      );
+      // Like other present names that cannot be read, optional includes fail too.
+      for (const marker of ["include", "include?"]) {
+        await assert.rejects(
+          hooks.config!({
+            agent: { review: { prompt: `[{{${marker}:${name}}}]` } },
+          }),
+          unreadable,
+        );
+        await assert.rejects(
+          hooks["tool.execute.after"]!(
+            skillInput,
+            skill(`{{${marker}:${name}}}`),
+          ),
+          unreadable,
+        );
+      }
+    }
+  },
+);
+
 test("startup sources retain per-consumer cycles, byte limits and original error positions", async (t) => {
   const f = await fixture(t);
   await writeFile(join(f.directory, "full.md"), "é".repeat(32768));

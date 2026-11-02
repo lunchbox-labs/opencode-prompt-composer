@@ -277,6 +277,84 @@ test(
   },
 );
 
+test(
+  "keeps dangling and looping prompt-name symlinks as invalid entries and ignores other broken links",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const f = await fixture(t);
+    const prompts = join(f.global, "prompts");
+    const missing = join(f.root, "missing.md");
+    await symlink(missing, join(prompts, "review/dangling.md"));
+    await symlink(join(prompts, "loop.TXT"), join(prompts, "loop.TXT"));
+    await symlink(missing, join(prompts, "notes.json"));
+    await symlink(join(f.root, "missing-dir"), join(prompts, "area"));
+    // A later broken link does not shadow an earlier regular file.
+    await rm(join(f.custom, "prompts/review/evidence.md"));
+    await symlink(missing, join(f.custom, "prompts/review/evidence.md"));
+    const result = await discoverPrompts(
+      { directory: f.nested, worktree: f.project },
+      f.env,
+    );
+    assert.deepEqual(result.files.get("review/dangling.md"), {
+      path: join(prompts, "review/dangling.md"),
+      root: prompts,
+      relativePath: "review/dangling.md",
+    });
+    assert.equal(result.files.get("loop.TXT")?.path, join(prompts, "loop.TXT"));
+    assert.equal(result.files.has("notes.json"), false);
+    assert.equal(result.files.has("area"), false);
+    assert.equal(
+      result.files.get("review/evidence.md")?.path,
+      join(f.home, ".opencode/prompts/review/evidence.md"),
+    );
+  },
+);
+
+test(
+  "skips dangling and looping prompts roots like absent ones",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const f = await fixture(t);
+    const dangling = join(f.project, ".opencode/prompts");
+    const looping = join(f.home, ".opencode/prompts");
+    for (const root of [dangling, looping]) {
+      await rm(root, { recursive: true });
+    }
+    await symlink(join(f.root, "missing"), dangling);
+    await symlink(looping, looping);
+    const result = await discoverPrompts(
+      { directory: f.nested, worktree: f.project },
+      f.env,
+    );
+    assert.deepEqual(result.directories, f.roots);
+    assert.equal(
+      result.files.get("review/evidence.md")?.path,
+      join(f.custom, "prompts/review/evidence.md"),
+    );
+  },
+);
+
+test("reports a prompt entry removed during discovery as a discovery change", async (t) => {
+  const f = await fixture(t);
+  const entry = join(f.global, "prompts/review/evidence.md");
+  const original = fs.realpath;
+  t.mock.method(fs, "realpath", async (path: string) => {
+    if (path === entry) {
+      await rm(entry);
+    }
+    return original(path);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  await assert.rejects(
+    discoverPrompts({ directory: f.nested, worktree: f.project }, f.env),
+    { message: `Prompt discovery changed: ${entry}. Retry composition.` },
+  );
+});
+
 test("discovery resolves a bounded number of entries at a time and stops at the entry limit", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "prompt-discovery-"));
   t.after(() => rm(root, { recursive: true, force: true }));
