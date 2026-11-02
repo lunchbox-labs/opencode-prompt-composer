@@ -10,6 +10,9 @@ import { promisify } from "node:util";
 const execute = promisify(execFile);
 const npm = process.env.npm_execpath;
 assert.ok(npm !== undefined, "Run package tests through npm");
+const { devDependencies } = JSON.parse(
+  await readFile(new URL("../package.json", import.meta.url), "utf8"),
+) as { devDependencies: Record<string, string> };
 
 test(
   "packed plugin installs independently and exposes working include-only runtime and declarations",
@@ -77,8 +80,8 @@ test(
         "--no-audit",
         "--no-fund",
         join(root, filename),
-        "@opencode-ai/plugin@1.19.5",
-        "@types/node@24.19.1",
+        `@opencode-ai/plugin@${devDependencies["@opencode-ai/plugin"]}`,
+        `@types/node@${devDependencies["@types/node"]}`,
       ],
       { timeout: 120_000, signal: t.signal },
     );

@@ -31,8 +31,9 @@ test("test-only host policy retains the range and floor independently of package
 
 test("TUI dev dependencies match the copies every supported OpenCode host loads", () => {
   // OpenCode 1.19.x maps a plugin's @opentui/* and solid-js imports to its own
-  // bundled copies (@opentui 0.4.5, solid-js 1.9.x). Building against newer
-  // releases would let code use APIs no supported host provides.
+  // bundled copies (@opentui 0.4.5 and a patched solid-js 1.9.10). Building
+  // against newer releases would let code use APIs no supported host provides.
+  // solid-js stays at 1.9.12, the exact peer of @opentui 0.4.5.
   for (const name of ["@opentui/core", "@opentui/keymap", "@opentui/solid"]) {
     assert.equal(manifest.devDependencies[name], "0.4.5", name);
     assert.equal(lock.packages[`node_modules/${name}`].version, "0.4.5", name);
