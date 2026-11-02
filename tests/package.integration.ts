@@ -77,7 +77,7 @@ test(
         "--no-audit",
         "--no-fund",
         join(root, filename),
-        "@opencode-ai/plugin@1.18.34",
+        "@opencode-ai/plugin@1.19.0",
         "@types/node@24.19.1",
       ],
       { timeout: 120_000, signal: t.signal },

@@ -80,7 +80,7 @@ test("mirrors pinned host root order and later relative-path overrides", async (
 
 test("project disable flag keeps global, home and custom discovery", async (t) => {
   const f = await fixture(t);
-  // OpenCode 1.18.34's Flag.truthy accepts case-insensitive "true" and "1".
+  // OpenCode 1.19.0's Flag.truthy accepts case-insensitive "true" and "1".
   for (const value of ["1", "true", "TRUE", "True"]) {
     const result = await discoverPrompts(
       { directory: f.nested, worktree: f.project },
