@@ -401,7 +401,7 @@ test("reports the ancestor limit only after every checked ancestor succeeds", as
     /ancestor-directory limit/,
   );
   assert.equal(checked.length, 256);
-  assert.ok(!checked.includes("/home/.opencode"));
+  assert.ok(!checked.includes(join("/home", ".opencode")));
 
   const last = checked[255];
   const failing = (path: string): Promise<boolean> =>
