@@ -17,8 +17,8 @@ jobs:
       github.repository == 'lunchbox-labs/opencode-prompt-composer' &&
       github.event_name == 'release' && !github.event.release.prerelease
     runs-on: ubuntu-latest
-    # Windows runs only after merge, so a release can be published while the
-    # commit's Check run is still going.
+    # A release can be published while the release commit's push-event Check run
+    # on main is still going, or after it failed, so publishing waits for it.
     timeout-minutes: 45
     permissions:
       contents: read
