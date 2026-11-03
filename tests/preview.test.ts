@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  VIEW_CHARACTERS,
-  VIEW_LINE_CHARACTERS,
+  MAX_CODE_POINTS_PER_VIEW,
+  MAX_CODE_POINTS_PER_VIEW_LINE,
   previewParts,
 } from "../src/preview.ts";
 
@@ -12,10 +12,10 @@ test("text within the view limits opens as one complete view", () => {
   for (const text of [
     prompt,
     "",
-    "x".repeat(VIEW_LINE_CHARACTERS),
-    `${"x".repeat(VIEW_LINE_CHARACTERS)}\nrest`,
-    `${"x".repeat(VIEW_LINE_CHARACTERS - 1)}\r\nrest`,
-    `${"🙂\n".repeat(VIEW_CHARACTERS / 2 - 1)}🙂🙂`,
+    "x".repeat(MAX_CODE_POINTS_PER_VIEW_LINE),
+    `${"x".repeat(MAX_CODE_POINTS_PER_VIEW_LINE)}\nrest`,
+    `${"x".repeat(MAX_CODE_POINTS_PER_VIEW_LINE - 1)}\r\nrest`,
+    `${"🙂\n".repeat(MAX_CODE_POINTS_PER_VIEW / 2 - 1)}🙂🙂`,
   ]) {
     assert.deepEqual(previewParts(text), [text]);
   }
@@ -24,26 +24,26 @@ test("text within the view limits opens as one complete view", () => {
 test("oversized text splits into bounded views at line breaks without losing characters", () => {
   const line = "Use evidence 🙂 and state uncertainty.\r\n";
   for (const text of [
-    "x".repeat(VIEW_LINE_CHARACTERS + 1),
-    `${"🙂".repeat(3 * VIEW_LINE_CHARACTERS)}\n`,
-    line.repeat(Math.ceil((3 * VIEW_CHARACTERS) / line.length)),
-    "\n".repeat(VIEW_CHARACTERS + 1),
-    `${"$ARGUMENTS \\{{include:literal.md}}\n".repeat(4000)}${"界".repeat(2 * VIEW_LINE_CHARACTERS)}\n tail`,
+    "x".repeat(MAX_CODE_POINTS_PER_VIEW_LINE + 1),
+    `${"🙂".repeat(3 * MAX_CODE_POINTS_PER_VIEW_LINE)}\n`,
+    line.repeat(Math.ceil((3 * MAX_CODE_POINTS_PER_VIEW) / line.length)),
+    "\n".repeat(MAX_CODE_POINTS_PER_VIEW + 1),
+    `${"$ARGUMENTS \\{{include:literal.md}}\n".repeat(4000)}${"界".repeat(2 * MAX_CODE_POINTS_PER_VIEW_LINE)}\n tail`,
   ]) {
     const parts = previewParts(text);
     assert.equal(parts.join(""), text);
     for (const [index, part] of parts.entries()) {
       assert.notEqual(part, "");
-      assert.ok(Array.from(part).length <= VIEW_CHARACTERS);
+      assert.ok(Array.from(part).length <= MAX_CODE_POINTS_PER_VIEW);
       assert.equal(part.isWellFormed(), true);
       for (const segment of part.split("\n")) {
-        assert.ok(Array.from(segment).length <= VIEW_LINE_CHARACTERS);
+        assert.ok(Array.from(segment).length <= MAX_CODE_POINTS_PER_VIEW_LINE);
       }
       // Only a line longer than one view allows can end a view mid-line.
       if (index < parts.length - 1 && !part.endsWith("\n")) {
         assert.equal(
           Array.from(part.slice(part.lastIndexOf("\n") + 1)).length,
-          VIEW_LINE_CHARACTERS,
+          MAX_CODE_POINTS_PER_VIEW_LINE,
         );
       }
     }

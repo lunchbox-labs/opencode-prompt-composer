@@ -31,8 +31,8 @@ export interface PromptInventory {
    */
   files: Map<string, DiscoveredPrompt>;
 }
-/** `broken` is a symlink whose target is missing, loops or runs through a file. */
-type Lookup = { metadata: Stats } | { broken: true } | { error: unknown };
+type Lookup =
+  { metadata: Stats } | { brokenSymlink: true } | { error: unknown };
 
 const MAX_ENTRIES = 4096;
 // Bounds how many child lookups run at once and how many run ahead of an
@@ -193,7 +193,7 @@ export async function discoverPrompts(
       try {
         const target = await resolveChild(child);
         if (target === undefined) {
-          return { broken: true };
+          return { brokenSymlink: true };
         }
         if (!contained(canonicalRoot, target)) {
           throw new SettingsError(

@@ -208,24 +208,40 @@ test("allows exactly 4096 entries and reports the limit before later failures", 
   const discover = () =>
     discoverPrompts({ directory: empty, worktree: empty }, env);
   const name = (index: number) => `${String(index).padStart(4, "0")}.md`;
-  // The directory itself is the first entry.
-  for (let start = 0; start < 4095; start += 512) {
+  const discoveryEntryLimit = 4096;
+  const manyDirectoryEntryCount = 1;
+  const promptFilesAtEntryLimit = discoveryEntryLimit - manyDirectoryEntryCount;
+  const fileWriteBatchSize = 512;
+  const entryLimitError = new RegExp(`exceeds ${discoveryEntryLimit} entries`);
+  for (
+    let start = 0;
+    start < promptFilesAtEntryLimit;
+    start += fileWriteBatchSize
+  ) {
     await Promise.all(
-      Array.from({ length: Math.min(512, 4095 - start) }, (_, offset) =>
-        writeFile(join(many, name(start + offset)), "Snippet"),
+      Array.from(
+        {
+          length: Math.min(fileWriteBatchSize, promptFilesAtEntryLimit - start),
+        },
+        (_, offset) => writeFile(join(many, name(start + offset)), "Snippet"),
       ),
     );
   }
   const result = await discover();
-  assert.equal(result.files.size, 4095);
-  assert.equal(result.files.has("many/4094.md"), true);
+  assert.equal(result.files.size, promptFilesAtEntryLimit);
+  assert.equal(
+    result.files.has(`many/${name(promptFilesAtEntryLimit - 1)}`),
+    true,
+  );
   // The limit falls inside a lookup batch; its later entries are never resolved.
-  const past = Array.from({ length: 4 }, (_, offset) => name(4095 + offset));
+  const past = Array.from({ length: 4 }, (_, offset) =>
+    name(promptFilesAtEntryLimit + offset),
+  );
   for (const file of past) {
     await writeFile(join(many, file), "Snippet");
   }
   const trace = traceLookups(t);
-  await assert.rejects(discover(), /exceeds 4096 entries/);
+  await assert.rejects(discover(), entryLimitError);
   assert.deepEqual(
     trace.paths.filter((path) => past.includes(basename(path))),
     [],
@@ -243,7 +259,7 @@ test("allows exactly 4096 entries and reports the limit before later failures", 
     }
     throw error;
   }
-  await assert.rejects(discover(), /exceeds 4096 entries/);
+  await assert.rejects(discover(), entryLimitError);
 });
 
 test("discovery overlaps a bounded number of path lookups", async (t) => {
@@ -277,8 +293,7 @@ test(
   },
 );
 
-/** Creates a symlink, or skips the test where symlinks need a privilege it lacks. */
-async function link(
+async function createSymlinkOrSkip(
   t: TestContext,
   target: string,
   path: string,
@@ -303,18 +318,40 @@ test("keeps broken prompt-name symlinks as invalid entries and ignores other bro
   const prompts = join(f.global, "prompts");
   const missing = join(f.root, "missing.md");
   await writeFile(join(f.root, "plain.md"), "plain");
-  if (!(await link(t, missing, join(prompts, "review/dangling.md")))) {
+  if (
+    !(await createSymlinkOrSkip(
+      t,
+      missing,
+      join(prompts, "review/dangling.md"),
+    ))
+  ) {
     return;
   }
-  await link(t, join(f.root, "plain.md", "x.md"), join(prompts, "through.md"));
-  await link(t, missing, join(prompts, "notes.json"));
-  await link(t, join(f.root, "missing-dir"), join(prompts, "area"));
+  await createSymlinkOrSkip(
+    t,
+    join(f.root, "plain.md", "x.md"),
+    join(prompts, "through.md"),
+  );
+  await createSymlinkOrSkip(t, missing, join(prompts, "notes.json"));
+  await createSymlinkOrSkip(
+    t,
+    join(f.root, "missing-dir"),
+    join(prompts, "area"),
+  );
   if (loops) {
-    await link(t, join(prompts, "loop.TXT"), join(prompts, "loop.TXT"));
+    await createSymlinkOrSkip(
+      t,
+      join(prompts, "loop.TXT"),
+      join(prompts, "loop.TXT"),
+    );
   }
   // A later broken link does not shadow an earlier regular file.
   await rm(join(f.custom, "prompts/review/evidence.md"));
-  await link(t, missing, join(f.custom, "prompts/review/evidence.md"));
+  await createSymlinkOrSkip(
+    t,
+    missing,
+    join(f.custom, "prompts/review/evidence.md"),
+  );
   const result = await discoverPrompts(
     { directory: f.nested, worktree: f.project },
     f.env,
@@ -344,12 +381,12 @@ test("skips broken prompts roots like absent ones", async (t) => {
   const dangling = join(f.project, ".opencode/prompts");
   const looping = join(f.home, ".opencode/prompts");
   await rm(dangling, { recursive: true });
-  if (!(await link(t, join(f.root, "missing"), dangling))) {
+  if (!(await createSymlinkOrSkip(t, join(f.root, "missing"), dangling))) {
     return;
   }
   if (loops) {
     await rm(looping, { recursive: true });
-    await link(t, looping, looping);
+    await createSymlinkOrSkip(t, looping, looping);
   }
   const result = await discoverPrompts(
     { directory: f.nested, worktree: f.project },

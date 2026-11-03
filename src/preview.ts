@@ -1,7 +1,6 @@
-/** Code points rendered by one scrollable view. */
-export const VIEW_CHARACTERS = 65_536;
+export const MAX_CODE_POINTS_PER_VIEW = 65_536;
 /** OpenTUI wraps each line as a whole: long lines wrap slowly and stop near 65,535 columns. */
-export const VIEW_LINE_CHARACTERS = 4096;
+export const MAX_CODE_POINTS_PER_VIEW_LINE = 4096;
 
 /**
  * Split text into bounded views that end at line breaks unless one line is too long.
@@ -12,27 +11,29 @@ export function previewParts(text: string): string[] {
   let start = 0;
   let lineStart = 0;
   let end = 0;
-  let characters = 0;
-  let line = 0;
+  let viewCodePoints = 0;
+  let lineCodePoints = 0;
   for (const character of text) {
-    // Start a new view only when this code point would exceed a limit.
-    if (character !== "\n" && line === VIEW_LINE_CHARACTERS) {
+    const lineLimitReached =
+      character !== "\n" && lineCodePoints === MAX_CODE_POINTS_PER_VIEW_LINE;
+    const viewLimitReached = viewCodePoints === MAX_CODE_POINTS_PER_VIEW;
+    if (lineLimitReached) {
       parts.push(text.slice(start, end));
       start = lineStart = end;
-      characters = line = 0;
-    } else if (characters === VIEW_CHARACTERS) {
+      viewCodePoints = lineCodePoints = 0;
+    } else if (viewLimitReached) {
       // Lines are shorter than views, so this view contains a line break.
       parts.push(text.slice(start, lineStart));
       start = lineStart;
-      characters = line;
+      viewCodePoints = lineCodePoints;
     }
     end += character.length;
-    characters++;
+    viewCodePoints++;
     if (character === "\n") {
       lineStart = end;
-      line = 0;
+      lineCodePoints = 0;
     } else {
-      line++;
+      lineCodePoints++;
     }
   }
   parts.push(text.slice(start));

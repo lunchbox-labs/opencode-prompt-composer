@@ -3,7 +3,7 @@ import { setImmediate } from "node:timers/promises";
 import { test } from "node:test";
 import type { Config } from "@opencode-ai/plugin";
 import type { TuiPluginApi, TuiPluginMeta } from "@opencode-ai/plugin/tui";
-import { VIEW_CHARACTERS } from "../src/preview.ts";
+import { MAX_CODE_POINTS_PER_VIEW } from "../src/preview.ts";
 import tui from "../src/tui.ts";
 import {
   destroyFixedMenu,
@@ -369,7 +369,9 @@ test("command viewers preserve whitespace, Unicode, literal syntax and metadata"
 
 test("oversized text opens bounded parts that each open in the viewer", async () => {
   const line = "Review evidence and state uncertainty.\n";
-  const text = line.repeat(Math.ceil((2 * VIEW_CHARACTERS) / line.length));
+  const text = line.repeat(
+    Math.ceil((2 * MAX_CODE_POINTS_PER_VIEW) / line.length),
+  );
   const h = await harness({ command: { long: { template: text } } });
   h.open();
   await h.view("View prompts");

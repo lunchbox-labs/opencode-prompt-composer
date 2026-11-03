@@ -40,9 +40,9 @@ export async function createTextViewer(api: TuiPluginApi) {
         selectable: false,
       }),
     );
+    const heightBeforeWrapMeasurement = props.text.split("\n").length;
     const scroll = new ScrollBoxRenderable(renderer, {
-      // Logical lines until the wrapped body reports its height.
-      height: Math.min(rows(), props.text.split("\n").length),
+      height: Math.min(rows(), heightBeforeWrapMeasurement),
       flexShrink: 0,
       verticalScrollbarOptions: {
         paddingLeft: 1,
