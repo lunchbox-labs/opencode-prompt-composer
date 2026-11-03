@@ -116,7 +116,6 @@ test("deduplicates repeated roots and respects worktree traversal boundary", asy
 
 test("keeps non-regular prompt names only where no root has a regular file", async (t) => {
   const f = await fixture(t);
-  // A later directory named like a prompt does not shadow an earlier file.
   await rm(join(f.custom, "prompts/review/evidence.md"));
   await mkdir(join(f.custom, "prompts/review/evidence.md"));
   await mkdir(join(f.global, "prompts/personal/review.md"), {
@@ -129,6 +128,7 @@ test("keeps non-regular prompt names only where no root has a regular file", asy
   assert.equal(
     result.files.get("review/evidence.md")?.path,
     join(f.home, ".opencode/prompts/review/evidence.md"),
+    "a later directory named like a prompt does not shadow an earlier file",
   );
   assert.equal(
     result.files.get("personal/review.md")?.path,
@@ -233,7 +233,7 @@ test("allows exactly 4096 entries and reports the limit before later failures", 
     result.files.has(`many/${name(promptFilesAtEntryLimit - 1)}`),
     true,
   );
-  // The limit falls inside a lookup batch; its later entries are never resolved.
+  // The limit falls inside a lookup batch.
   const past = Array.from({ length: 4 }, (_, offset) =>
     name(promptFilesAtEntryLimit + offset),
   );
@@ -245,6 +245,7 @@ test("allows exactly 4096 entries and reports the limit before later failures", 
   assert.deepEqual(
     trace.paths.filter((path) => past.includes(basename(path))),
     [],
+    "the batch's entries past the limit are never resolved",
   );
   for (const file of past) {
     await rm(join(many, file));
@@ -345,7 +346,6 @@ test("keeps broken prompt-name symlinks as invalid entries and ignores other bro
       join(prompts, "loop.TXT"),
     );
   }
-  // A later broken link does not shadow an earlier regular file.
   await rm(join(f.custom, "prompts/review/evidence.md"));
   await createSymlinkOrSkip(
     t,
@@ -373,6 +373,7 @@ test("keeps broken prompt-name symlinks as invalid entries and ignores other bro
   assert.equal(
     result.files.get("review/evidence.md")?.path,
     join(f.home, ".opencode/prompts/review/evidence.md"),
+    "a later broken link does not shadow an earlier regular file",
   );
 });
 

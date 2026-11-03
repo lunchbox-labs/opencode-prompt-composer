@@ -204,7 +204,6 @@ test(
 
 test("includes fail for present prompt names that are not regular files", async (t) => {
   const f = await fixture(t);
-  // A directory or FIFO at the referenced path is invalid, not absent.
   await mkdir(join(f.directory, "personal/review.md"), { recursive: true });
   const names = ["personal/review.md"];
   if (process.platform !== "win32") {
@@ -219,6 +218,7 @@ test("includes fail for present prompt names that are not regular files", async 
           agent: { review: { prompt: `[{{${marker}:${name}}}]` } },
         }),
         /must be regular UTF-8 files/,
+        "a directory or FIFO at the referenced path is invalid, not absent",
       );
     }
   }
@@ -254,13 +254,14 @@ test("broken prompt symlinks fail only for includes that use them", async (t) =>
     const unreadable = new RegExp(
       `Could not read prompt include "${name.replace(".", "\\.")}"\\. Check`,
     );
-    // Like other present names that cannot be read, optional includes fail too.
     for (const marker of ["include", "include?"]) {
+      const failsLikeOtherUnreadableNames = `${marker} fails for ${name}, like other present names that cannot be read`;
       await assert.rejects(
         hooks.config!({
           agent: { review: { prompt: `[{{${marker}:${name}}}]` } },
         }),
         unreadable,
+        failsLikeOtherUnreadableNames,
       );
       await assert.rejects(
         hooks["tool.execute.after"]!(
@@ -268,6 +269,7 @@ test("broken prompt symlinks fail only for includes that use them", async (t) =>
           skill(`{{${marker}:${name}}}`),
         ),
         unreadable,
+        failsLikeOtherUnreadableNames,
       );
     }
   }

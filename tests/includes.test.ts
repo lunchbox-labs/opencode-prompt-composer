@@ -183,7 +183,6 @@ test("optional includes expand discovered snippets and drop only missing ones", 
     ),
     "A Personal evidence B C {{include?:personal.md}} {{include?:",
   );
-  // A nested marker keeps its own form inside an optional snippet.
   await assert.rejects(
     expandIncludes("{{include?:requires.md}}", sources),
     (error: Error) => {
@@ -191,6 +190,7 @@ test("optional includes expand discovered snippets and drop only missing ones", 
       assert.match(error.message, /chain: "requires\.md" -> "missing\.md"/);
       return true;
     },
+    "a nested marker keeps its own form inside an optional snippet",
   );
 });
 

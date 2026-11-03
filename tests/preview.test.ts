@@ -39,11 +39,11 @@ test("oversized text splits into bounded views at line breaks without losing cha
       for (const segment of part.split("\n")) {
         assert.ok(Array.from(segment).length <= MAX_CODE_POINTS_PER_VIEW_LINE);
       }
-      // Only a line longer than one view allows can end a view mid-line.
       if (index < parts.length - 1 && !part.endsWith("\n")) {
         assert.equal(
           Array.from(part.slice(part.lastIndexOf("\n") + 1)).length,
           MAX_CODE_POINTS_PER_VIEW_LINE,
+          "only a line longer than one view allows can end a view mid-line",
         );
       }
     }

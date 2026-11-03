@@ -759,7 +759,6 @@ test(
     assert.equal(await readFile(agentPath, "utf8"), changedAgentText);
     assert.equal(await readFile(helperPath, "utf8"), helperText);
 
-    // Command-only includes work without includes in the active agent body.
     const commandOnlyAgentText =
       "---\ndescription: Review changes\nmode: primary\n---\nReview";
     await writeFile(agentPath, commandOnlyAgentText);
@@ -770,6 +769,7 @@ test(
     assert.equal(
       commandOnly.command.check.template,
       "Check Project evidence $ARGUMENTS {{include:literal.md}}",
+      "command-only includes work without includes in the active agent body",
     );
     if (configPlugin !== undefined) {
       await exerciseConfigEditor(configPlugin, shared, api);
@@ -855,13 +855,15 @@ test(
     assert.equal(await readFile(buildPath, "utf8"), buildText);
     assert.equal(await readFile(obsoletePath, "utf8"), obsoleteText);
 
-    // A present optional snippet that cannot be read as UTF-8 text fails the
-    // whole composition instead of expanding to nothing.
     await writeFile(personalPath, Buffer.from([0xff]));
     await stopHost();
     await startHost();
     const unreadable = (await api("/config")) as typeof config;
-    assert.equal(unreadable.agent.review.prompt, agentBody, logs);
+    assert.equal(
+      unreadable.agent.review.prompt,
+      agentBody,
+      `a present optional snippet that cannot be read as UTF-8 text fails the whole composition instead of expanding to nothing\n${logs}`,
+    );
     // The host log escapes quotes inside the reported reason.
     assert.match(
       logs,

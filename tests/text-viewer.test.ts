@@ -46,10 +46,10 @@ test("viewers fit short text and keep long text within the resized terminal", as
     message: "Short\ntext",
   });
   const { scroll, body } = parts(element);
-  // Paging keys apply to this viewer only while its scroll box has focus.
   assert.deepEqual(
     Array.from(layers, ({ target, targetMode }) => ({ target, targetMode })),
     [{ target: scroll, targetMode: "focus" }],
+    "paging keys apply to this viewer only while its scroll box has focus",
   );
   const reportWrappedHeight = (rows: number) => {
     body.height = rows;

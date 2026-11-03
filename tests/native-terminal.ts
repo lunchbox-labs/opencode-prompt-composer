@@ -347,15 +347,17 @@ export async function exerciseNativeTerminal(options: {
     const outlineViewer = async () => {
       await select("Command: outline", viewerHint);
       await terminal.wait("Command: outline", "Outline step 001:");
-      // The extra-large dialog keeps this sentence on a single row.
       assert.ok(
         terminal
           .text()
           .split("\n")
           .some((row) => row.includes(outline[0])),
-        terminal.text(),
+        `The extra-large dialog must keep this sentence on a single row:\n${terminal.text()}`,
       );
-      assert.ok(!steps().includes(150), "Long text must scroll");
+      assert.ok(
+        !steps().includes(150),
+        "Long text must open at the top and scroll",
+      );
     };
     await open();
     terminal.write("\x1b[B\r");
@@ -375,7 +377,6 @@ export async function exerciseNativeTerminal(options: {
     await terminal.wait("End of outline.");
     await scrolled("\x1b[5~", (shown) => !shown.includes(150));
     await scrolled("\x1b[H", (shown) => shown[0] === 1);
-    // The viewer refits below the dialog's top offset as the terminal shrinks and grows.
     terminal.resize(120, 30);
     await terminal.waitFor(() => {
       const rows = terminal.text().split("\n");
@@ -388,15 +389,14 @@ export async function exerciseNativeTerminal(options: {
         shown.length < top &&
         shown[0] === 1
       );
-    }, "viewer fitted to a smaller terminal");
+    }, "viewer refitted below the dialog's top offset in a smaller terminal");
     await scrolled("\x1b[F", (shown) => shown.includes(150));
     terminal.resize(180, 55);
     await terminal.waitFor(
       () => steps().length === top && steps().includes(150),
-      "viewer fitted to a larger terminal",
+      "viewer refitted to a larger terminal",
     );
     await back("Loaded command templates");
-    // Each opening starts from the top with a fresh viewer.
     for (let opened = 0; opened < 2; opened++) {
       await outlineViewer();
       await scrolled("\x1b[F", (shown) => shown.includes(150));
@@ -436,12 +436,12 @@ export async function exerciseNativeTerminal(options: {
     await terminal.waitFor(terminal.promptFocused, "main input after preview");
     await open();
     terminal.write("\r");
-    // The visibility choice persists in the host key-value store across opens.
-    await terminal.wait(
+    const builtinVisibilityPersistedAcrossOpens = [
       "Loaded agent prompts",
       "Hide built-in agents",
       `Agent: ${options.builtin} (built-in)`,
-    );
+    ];
+    await terminal.wait(...builtinVisibilityPersistedAcrossOpens);
     await select("Hide built-in agents", "Loaded agent prompts");
     await hiddenBuiltins();
     terminal.write("\x1b");
