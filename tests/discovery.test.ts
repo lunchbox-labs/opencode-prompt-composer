@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs, { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, join, sep } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { type TestContext, test } from "node:test";
 import { discoverPrompts, discoveryDirectories } from "../src/discovery.ts";
 
@@ -80,7 +80,7 @@ test("mirrors pinned host root order and later relative-path overrides", async (
 
 test("project disable flag keeps global, home and custom discovery", async (t) => {
   const f = await fixture(t);
-  // OpenCode 1.18.34's Flag.truthy accepts case-insensitive "true" and "1".
+  // OpenCode 1.19.x's Flag.truthy accepts case-insensitive "true" and "1".
   for (const value of ["1", "true", "TRUE", "True"]) {
     const result = await discoverPrompts(
       { directory: f.nested, worktree: f.project },
@@ -430,11 +430,19 @@ test("discovery resolves a bounded number of entries at a time and stops at the 
 });
 
 test("checks ancestor roots together, keeping root order and the first failure in path order", async (t) => {
+  // Build the paths from the platform's filesystem root so they match what
+  // discovery resolves on Windows as well as on POSIX.
+  const root = resolve("/");
   const environment = {
-    XDG_CONFIG_HOME: "/config",
-    OPENCODE_TEST_HOME: "/home",
+    XDG_CONFIG_HOME: join(root, "config"),
+    OPENCODE_TEST_HOME: join(root, "home"),
   };
-  const context = { directory: "/work/a/b", worktree: "/work" };
+  const context = {
+    directory: join(root, "work", "a", "b"),
+    worktree: join(root, "work"),
+  };
+  const missing = join(root, "work", "a", ".opencode");
+  const nearest = join(root, "work", "a", "b", ".opencode");
   const started: string[] = [];
   let release!: () => void;
   const gate = new Promise<void>((resolve) => (release = resolve));
@@ -457,28 +465,28 @@ test("checks ancestor roots together, keeping root order and the first failure i
     await new Promise((resolve) =>
       setTimeout(resolve, 10 - started.indexOf(path)),
     );
-    return path !== "/work/a/.opencode";
+    return path !== missing;
   };
   assert.deepEqual(await discoveryDirectories(context, environment, present), [
-    "/config/opencode",
-    "/work/a/b/.opencode",
-    "/work/.opencode",
-    "/home/.opencode",
+    join(root, "config", "opencode"),
+    nearest,
+    join(root, "work", ".opencode"),
+    join(root, "home", ".opencode"),
   ]);
 
   const failing = async (path: string): Promise<boolean> => {
     // The later root fails first; the earlier root's failure is still reported.
     await new Promise((resolve) =>
-      setTimeout(resolve, path === "/work/a/b/.opencode" ? 20 : 0),
+      setTimeout(resolve, path === nearest ? 20 : 0),
     );
-    if (path === "/work/a/b/.opencode" || path === "/home/.opencode") {
+    if (path === nearest || path === join(root, "home", ".opencode")) {
       throw new Error(`denied ${path}`);
     }
     return true;
   };
   await assert.rejects(
     discoveryDirectories(context, environment, failing),
-    /denied \/work\/a\/b\/\.opencode/,
+    (error) => error instanceof Error && error.message === `denied ${nearest}`,
   );
 });
 
@@ -499,7 +507,7 @@ test("reports the ancestor limit only after every checked ancestor succeeds", as
     /ancestor-directory limit/,
   );
   assert.equal(checked.length, 256);
-  assert.ok(!checked.includes("/home/.opencode"));
+  assert.ok(!checked.includes(join("/home", ".opencode")));
 
   const last = checked[255];
   const failing = (path: string): Promise<boolean> =>
