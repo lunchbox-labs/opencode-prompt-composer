@@ -209,8 +209,9 @@ test("allows exactly 4096 entries and reports the limit before later failures", 
     discoverPrompts({ directory: empty, worktree: empty }, env);
   const name = (index: number) => `${String(index).padStart(4, "0")}.md`;
   const discoveryEntryLimit = 4096;
-  const manyDirectoryEntryCount = 1;
-  const promptFilesAtEntryLimit = discoveryEntryLimit - manyDirectoryEntryCount;
+  const entriesUsedByManyDirectoryItself = 1;
+  const promptFilesAtEntryLimit =
+    discoveryEntryLimit - entriesUsedByManyDirectoryItself;
   const fileWriteBatchSize = 512;
   const entryLimitError = new RegExp(`exceeds ${discoveryEntryLimit} entries`);
   for (

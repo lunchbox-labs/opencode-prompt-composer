@@ -14,14 +14,14 @@ export function previewParts(text: string): string[] {
   let viewCodePoints = 0;
   let lineCodePoints = 0;
   for (const character of text) {
-    const lineLimitReached =
+    const characterOverflowsLine =
       character !== "\n" && lineCodePoints === MAX_CODE_POINTS_PER_VIEW_LINE;
-    const viewLimitReached = viewCodePoints === MAX_CODE_POINTS_PER_VIEW;
-    if (lineLimitReached) {
+    const characterOverflowsView = viewCodePoints === MAX_CODE_POINTS_PER_VIEW;
+    if (characterOverflowsLine) {
       parts.push(text.slice(start, end));
       start = lineStart = end;
       viewCodePoints = lineCodePoints = 0;
-    } else if (viewLimitReached) {
+    } else if (characterOverflowsView) {
       // Lines are shorter than views, so this view contains a line break.
       parts.push(text.slice(start, lineStart));
       start = lineStart;

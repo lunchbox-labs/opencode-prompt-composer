@@ -436,12 +436,12 @@ export async function exerciseNativeTerminal(options: {
     await terminal.waitFor(terminal.promptFocused, "main input after preview");
     await open();
     terminal.write("\r");
-    const builtinVisibilityPersistedAcrossOpens = [
+    // Built-in visibility persists in the host key-value store across opens.
+    await terminal.wait(
       "Loaded agent prompts",
       "Hide built-in agents",
       `Agent: ${options.builtin} (built-in)`,
-    ];
-    await terminal.wait(...builtinVisibilityPersistedAcrossOpens);
+    );
     await select("Hide built-in agents", "Loaded agent prompts");
     await hiddenBuiltins();
     terminal.write("\x1b");

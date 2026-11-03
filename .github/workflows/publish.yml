@@ -17,8 +17,9 @@ jobs:
       github.repository == 'lunchbox-labs/opencode-prompt-composer' &&
       github.event_name == 'release' && !github.event.release.prerelease
     runs-on: ubuntu-latest
-    # A release can be published while the release commit's push-event Check run
-    # on main is still going, or after it failed, so publishing waits for it.
+    # A release can be published before the release commit's push-event Check run
+    # on main finishes, or after it failed, so publishing waits for that run and
+    # stops unless it passed.
     timeout-minutes: 45
     permissions:
       contents: read

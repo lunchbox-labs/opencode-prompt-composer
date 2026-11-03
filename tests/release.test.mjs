@@ -272,10 +272,10 @@ test("release commit checks accept only the latest push run of every required wo
       runOf(first, { run_attempt: 2, status: "in_progress", conclusion: null }),
     ]).state,
     "pending",
-    "a re-run keeps its run object and created_at and only raises run_attempt",
+    "an in-progress re-run of the latest run keeps the gate pending",
   );
   const laterRunDecides =
-    "a separate later run has a higher id, whatever its created_at says";
+    "the run with the highest id decides, whatever its created_at says";
   const failed = state([
     runOf(first, {
       id: 900,
