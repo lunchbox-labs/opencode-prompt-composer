@@ -20,7 +20,7 @@ test("review example authors its complete guidance in the original order", async
       OPENCODE_TEST_HOME: resolve("docs/examples/empty-home"),
     },
   );
-  const result = await compose(
+  const { config: result, incomplete } = await compose(
     { agent: { review: { prompt: body } } },
     (text, consumer) =>
       expandIncludes(text, inventory.files, undefined, consumer),
@@ -40,5 +40,6 @@ test("review example authors its complete guidance in the original order", async
     .replace("{{include:review/context.md}}", () => context.trim())
     .replace("{{include:review/findings.md}}", () => findings.trim())
     .replace("{{include?:personal/review.md}}", "");
+  assert.deepEqual(incomplete, []);
   assert.equal(result.agent!.review!.prompt, expected);
 });

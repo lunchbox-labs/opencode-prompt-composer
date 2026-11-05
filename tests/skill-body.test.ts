@@ -222,18 +222,22 @@ test("unrecognized framing without a notice callback still returns the output", 
   );
 });
 
-test("rejects a truncated native result before composition", async () => {
-  for (const body of ["{{include:body.md}}", "ordinary body"]) {
-    await assert.rejects(
-      expandSkillBody(
-        nativeOutput(body),
-        { ...metadata, truncated: true },
-        mustNotExpand,
-        mustNotNotify,
-      ),
-      /skill output was truncated/i,
-    );
-  }
+test("keeps a truncated native result, warning only when it contains includes", async () => {
+  await unchangedWithNotice(
+    nativeOutput("{{include:body.md}}"),
+    { ...metadata, truncated: true },
+    /truncated.*includes were not expanded/,
+  );
+  const ordinary = nativeOutput("ordinary body");
+  assert.equal(
+    await expandSkillBody(
+      ordinary,
+      { ...metadata, truncated: true },
+      mustNotExpand,
+      mustNotNotify,
+    ),
+    ordinary,
+  );
 });
 
 test("finds the body after rejecting repeated footer fragments within it", async () => {
@@ -270,17 +274,45 @@ test("keeps output with two valid body/footer decompositions instead of choosing
   );
 });
 
-test("propagates composition failure without returning partially expanded output", async () => {
-  const failure = new Error("Missing include.");
-  await assert.rejects(
-    expandSkillBody(
-      nativeOutput("{{include:missing.md}}"),
+test("keeps the native output and warns when composition fails as a whole", async () => {
+  const original = nativeOutput("PRIVATE {{include:body.md}}");
+  const notices: string[] = [];
+  assert.equal(
+    await expandSkillBody(
+      original,
       metadata,
       async () => {
-        throw failure;
+        throw new Error("The composed prompt exceeds the 256 KiB limit.");
       },
-      mustNotNotify,
+      (reason) => notices.push(reason),
     ),
-    (error: unknown) => error === failure,
+    original,
   );
+  assert.deepEqual(notices, [
+    'Skill "evidence" includes were not expanded. The composed prompt exceeds the 256 KiB limit.',
+  ]);
+});
+
+test("keeps the composed body and summarizes the includes it left out", async () => {
+  const original = nativeOutput(
+    "{{include:a.md}} {{include:b.md}} {{include:c.md}}",
+  );
+  const notices: string[] = [];
+  assert.equal(
+    await expandSkillBody(
+      original,
+      metadata,
+      async (_body, skip) => {
+        skip("First problem.");
+        skip("Second problem.");
+        skip("Third problem.");
+        return "Partly expanded";
+      },
+      (reason) => notices.push(reason),
+    ),
+    nativeOutput("Partly expanded"),
+  );
+  assert.deepEqual(notices, [
+    'Skill "evidence" has includes that were not expanded. First problem. 2 more problems not shown.',
+  ]);
 });

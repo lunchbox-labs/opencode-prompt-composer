@@ -1,5 +1,6 @@
-import { SettingsError } from "./errors.ts";
-import { hasIncludeMarker } from "./include-core.ts";
+import { diagnosticName } from "./errors.ts";
+import { type SkippedInclude, hasIncludeMarker } from "./include-core.ts";
+import { errorMessage, firstProblem } from "./notices.ts";
 
 const END = "\n</skill_files>\n</skill_content>";
 const UNKNOWN_FRAMING =
@@ -9,24 +10,14 @@ export type SkillNotice = (reason: string) => void;
 
 // OpenCode's V1 skill tool (1.19.0 and 1.19.3) supplies name/dir metadata,
 // but no structured body. Match its complete framing without rereading a
-// possibly changed, cached, or built-in SKILL.md. Unrecognized framing keeps
-// the native output and reports why, so the skill itself still loads.
+// possibly changed, cached, or built-in SKILL.md. Output that cannot be
+// composed keeps its native text and reports why, so the skill still loads.
 export async function expandSkillBody(
   output: string,
   metadata: unknown,
-  expand: (body: string) => Promise<string>,
+  expand: (body: string, skip: SkippedInclude) => Promise<string>,
   notify?: SkillNotice,
 ): Promise<string> {
-  if (
-    typeof metadata === "object" &&
-    metadata !== null &&
-    "truncated" in metadata &&
-    metadata.truncated === true
-  ) {
-    throw new SettingsError(
-      "The skill output was truncated before composition. Reduce its size and load it again.",
-    );
-  }
   if (!hasIncludeMarker(output)) {
     return output;
   }
@@ -34,6 +25,16 @@ export async function expandSkillBody(
     notify?.(reason);
     return output;
   };
+  if (
+    typeof metadata === "object" &&
+    metadata !== null &&
+    "truncated" in metadata &&
+    metadata.truncated === true
+  ) {
+    return unchanged(
+      "The skill output was truncated, so its includes were not expanded. Reduce the skill's size to compose it.",
+    );
+  }
   if (
     typeof metadata !== "object" ||
     metadata === null ||
@@ -100,9 +101,20 @@ export async function expandSkillBody(
   if (!hasIncludeMarker(body)) {
     return output;
   }
-  return (
-    output.slice(0, prefix.length) +
-    (await expand(body)) +
-    output.slice(boundary)
-  );
+  const skill = `Skill ${diagnosticName(metadata.name)}`;
+  const problems: string[] = [];
+  let expanded: string;
+  try {
+    expanded = await expand(body, (problem) => problems.push(problem));
+  } catch (error) {
+    return unchanged(
+      `${skill} includes were not expanded. ${errorMessage(error)}`,
+    );
+  }
+  if (problems.length > 0) {
+    notify?.(
+      `${skill} has includes that were not expanded. ${firstProblem(problems)}`,
+    );
+  }
+  return output.slice(0, prefix.length) + expanded + output.slice(boundary);
 }

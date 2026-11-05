@@ -8,6 +8,7 @@ import { discoverPrompts } from "../src/discovery.ts";
 import { expandIncludes } from "../src/includes.ts";
 import { compose } from "../src/runtime.ts";
 import server from "../src/server.ts";
+import { recordingToasts } from "./toasts.ts";
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "prompt-runtime-"));
@@ -138,24 +139,28 @@ test("marker-free native bodies above the include budget are preserved", async (
   assert.deepEqual(config, before);
 });
 
-test("failed config composition publishes no partial bodies and can retry corrected native references", async (t) => {
+test("a failing include is left out of its consumer while every other consumer composes", async (t) => {
   const { root, context } = await fixture(t);
   await writeFile(join(root, ".opencode/prompts/body.md"), "First");
   await writeFile(join(root, ".opencode/prompts/command.md"), "Command");
   const hooks = await server.server(context as PluginInput);
   const config: Config = {
     agent: { review: { prompt: "{{include:body.md}}" } },
-    command: { check: { template: "{{include:missing.md}}" } },
+    command: { check: { template: "Check [{{include:missing.md}}]" } },
   };
-  const before = structuredClone(config);
-  await assert.rejects(hooks.config!(config), /does not exist/);
-  assert.deepEqual(config, before);
+  await hooks.config!(config);
+  assert.equal(config.agent!.review!.prompt, "First");
+  assert.equal(config.command!.check.template, "Check []");
   await writeFile(
     join(root, ".opencode/prompts/missing.md"),
     "Added after startup",
   );
-  await assert.rejects(hooks.config!(config), /does not exist/);
-  assert.deepEqual(config, before);
+  await hooks.config!(config);
+  assert.equal(
+    config.command!.check.template,
+    "Check []",
+    "snippets added after startup stay absent until restart",
+  );
   config.command!.check.template = "{{include:command.md}}";
   await hooks.config!(config);
   assert.equal(config.agent!.review!.prompt, "First");
@@ -163,13 +168,6 @@ test("failed config composition publishes no partial bodies and can retry correc
   const applied = structuredClone(config);
   await writeFile(join(root, ".opencode/prompts/body.md"), "Second");
   await rm(join(root, ".opencode/prompts/command.md"));
-  await hooks.config!(config);
-  assert.deepEqual(config, applied);
-  config.command!.check.template = "{{include:still-missing.md}}";
-  const invalid = structuredClone(config);
-  await assert.rejects(hooks.config!(config), /does not exist/);
-  assert.deepEqual(config, invalid);
-  config.command!.check.template = applied.command!.check.template;
   await hooks.config!(config);
   assert.deepEqual(config, applied);
 });
@@ -213,7 +211,7 @@ test("config hook reuses startup snippets without duplicate expansion or metadat
   assert.equal(config.agent!.review!.prompt, "External body");
 });
 
-test("skills expand on demand and reject truncated bodies without touching unrelated tools", async (t) => {
+test("skills expand on demand and keep truncated bodies without touching unrelated tools", async (t) => {
   const { root } = await fixture(t);
   await writeFile(
     join(root, ".opencode/prompts/body.md"),
@@ -247,13 +245,12 @@ test("skills expand on demand and reject truncated bodies without touching unrel
       "Before\nSkill evidence\n{{include:literal.md}}\nAfter",
     ),
   });
-  await assert.rejects(
-    hooks["tool.execute.after"]!(
-      { tool: "skill", sessionID: "s", callID: "c", args: {} },
-      { ...output, metadata: { truncated: true } },
-    ),
-    /truncated/,
+  const truncated = { ...before, metadata: { truncated: true } };
+  await hooks["tool.execute.after"]!(
+    { tool: "skill", sessionID: "s", callID: "c", args: {} },
+    truncated,
   );
+  assert.equal(truncated.output, before.output);
 });
 
 test("wrapper-only markers stay literal and unknown skill output passes through unchanged", async (t) => {
@@ -293,62 +290,91 @@ test("include failures identify consumers and logical cycles without native path
       'command "check"',
     ],
   ] as const) {
-    await assert.rejects(
-      compose(native, (text, consumer) =>
-        expandIncludes(text, inventory.files, undefined, consumer),
-      ),
-      (error: Error) => {
-        assert.match(error.message, /cycle/);
-        assert.ok(error.message.includes(consumer));
-        assert.match(error.message, /a\.md.* -> .*b\.md.* -> .*a\.md/);
-        assert.doesNotMatch(error.message, /SECRET|agents\/|commands\//);
-        return true;
-      },
+    const { config, incomplete } = await compose(native, (text, consumer) =>
+      expandIncludes(text, inventory.files, undefined, consumer),
     );
+    assert.deepEqual(config, native, "a consumer that fails keeps its text");
+    assert.equal(incomplete.length, 1);
+    assert.equal(incomplete[0].consumer, consumer);
+    const [problem] = incomplete[0].problems;
+    assert.match(problem, /cycle/);
+    assert.ok(problem.includes(consumer));
+    assert.match(problem, /a\.md.* -> .*b\.md.* -> .*a\.md/);
+    assert.doesNotMatch(problem, /SECRET|agents\/|commands\//);
   }
 });
 
-test("skill failures have honest consumer context", async (t) => {
-  const { root } = await fixture(t);
-  const hooks = await server.server({
-    directory: root,
-    worktree: root,
-  } as PluginInput);
+test("a failing nested include leaves out only itself and reports the include chain", async (t) => {
+  const { root, context } = await fixture(t);
+  await writeFile(
+    join(root, ".opencode/prompts/body.md"),
+    "Start {{include:missing.md}} end",
+  );
+  const { input, toasts } = recordingToasts(context);
+  const hooks = await server.server(input);
+  const config: Config = {
+    agent: { review: { prompt: "[{{include:body.md}}]" } },
+  };
+  await hooks.config!(config);
+  assert.equal(config.agent!.review!.prompt, "[Start  end]");
+  assert.equal(toasts.length, 1);
+  assert.match(
+    toasts[0].body.message,
+    /"missing\.md" does not exist.*Consumer: agent "review"\. at "body\.md":1:7 Include chain: "body\.md" -> "missing\.md"\.$/,
+  );
+});
+
+test("skill include failures warn with honest consumer context", async (t) => {
+  const { context } = await fixture(t);
+  const { input, toasts } = recordingToasts(context);
+  const hooks = await server.server(input);
   const output = skillOutput("PRIVATE {{include:missing.md}}");
   const before = structuredClone(output);
-  await assert.rejects(
-    hooks["tool.execute.after"]!(
-      { tool: "skill", sessionID: "s", callID: "c", args: { name: "review" } },
-      output,
-    ),
-    (error: Error) => {
-      assert.match(error.message, /skill output.*source file unavailable/);
-      assert.doesNotMatch(error.message, /PRIVATE|SKILL\.md/);
-      return true;
-    },
+  await hooks["tool.execute.after"]!(
+    { tool: "skill", sessionID: "s", callID: "c", args: { name: "review" } },
+    output,
   );
-  assert.deepEqual(output, before);
+  assert.equal(
+    output.output,
+    before.output.replace("PRIVATE {{include:missing.md}}", "PRIVATE "),
+  );
+  assert.equal(toasts.length, 1);
+  assert.equal(toasts[0].body.variant, "warning");
+  const { message } = toasts[0].body;
+  assert.match(
+    message,
+    /^Skill "evidence" has includes that were not expanded/,
+  );
+  assert.match(message, /skill output.*source file unavailable/);
+  assert.doesNotMatch(message, /PRIVATE|SKILL\.md/);
 });
 
-test("skill composition failure after a valid include leaves the entire result unchanged", async (t) => {
+test("a failing skill include is left out while valid includes still expand", async (t) => {
   const { root, context } = await fixture(t);
   await writeFile(join(root, ".opencode/prompts/body.md"), "Expanded first");
-  const hooks = await server.server(context as PluginInput);
+  const { input, toasts } = recordingToasts(context);
+  const hooks = await server.server(input);
   const output = skillOutput("{{include:body.md}} then {{include:missing.md}}");
   const before = structuredClone(output);
-  await assert.rejects(
-    hooks["tool.execute.after"]!(
-      { tool: "skill", sessionID: "s", callID: "c", args: {} },
-      output,
-    ),
-    /does not exist/,
+  await hooks["tool.execute.after"]!(
+    { tool: "skill", sessionID: "s", callID: "c", args: {} },
+    output,
   );
-  assert.deepEqual(output, before);
+  assert.deepEqual(output, {
+    ...before,
+    output: before.output.replace(
+      "{{include:body.md}} then {{include:missing.md}}",
+      "Expanded first then ",
+    ),
+  });
+  assert.equal(toasts.length, 1);
+  assert.match(toasts[0].body.message, /"missing\.md" does not exist/);
 });
 
-test("truncated skill results reject without mutation even when framing is unknown", async (t) => {
+test("truncated skill results pass through unchanged and warn only when they contain includes", async (t) => {
   const { context } = await fixture(t);
-  const hooks = await server.server(context as PluginInput);
+  const { input, toasts } = recordingToasts(context);
+  const hooks = await server.server(input);
   for (const text of ["PRIVATE {{include:missing.md}}", "ordinary output"]) {
     const output = {
       ...skillOutput("Unused"),
@@ -356,15 +382,16 @@ test("truncated skill results reject without mutation even when framing is unkno
       output: text,
     };
     const before = structuredClone(output);
-    await assert.rejects(
-      hooks["tool.execute.after"]!(
-        { tool: "skill", sessionID: "s", callID: "c", args: {} },
-        output,
-      ),
-      /truncated/,
+    await hooks["tool.execute.after"]!(
+      { tool: "skill", sessionID: "s", callID: "c", args: {} },
+      output,
     );
     assert.deepEqual(output, before);
   }
+  assert.equal(toasts.length, 1);
+  assert.equal(toasts[0].body.variant, "warning");
+  assert.match(toasts[0].body.message, /truncated.*includes were not expanded/);
+  assert.doesNotMatch(toasts[0].body.message, /PRIVATE|missing\.md/);
 });
 
 test("unknown skill framing warns without exposing the native output", async (t) => {
@@ -423,33 +450,32 @@ test("toast failures cannot prevent unknown skill output from passing through", 
   }
 });
 
-test("config composition failures show one error toast and still reject without changes", async (t) => {
-  const { context } = await fixture(t);
-  const notices: {
-    body: { title: string; message: string; variant: string };
-  }[] = [];
-  const hooks = await server.server({
-    ...context,
-    client: {
-      tui: {
-        showToast: async (notice: (typeof notices)[number]) => {
-          notices.push(notice);
-        },
+test("config include failures show one warning toast naming every incomplete consumer", async (t) => {
+  const { root, context } = await fixture(t);
+  await writeFile(join(root, ".opencode/prompts/body.md"), "Body");
+  const { input, toasts } = recordingToasts(context);
+  const hooks = await server.server(input);
+  const config: Config = {
+    agent: {
+      review: { prompt: "Review {{include:missing.md}}" },
+      plan: { prompt: "Plan {{include:body.md}}" },
+    },
+    command: {
+      check: {
+        template: "Check {{include:../outside.md}} {{include:body.md}}",
       },
     },
-  } as unknown as PluginInput);
-  const config: Config = {
-    agent: { review: { prompt: "{{include:missing.md}}" } },
   };
-  const before = structuredClone(config);
-  await assert.rejects(hooks.config!(config), /does not exist/);
-  assert.deepEqual(config, before);
-  assert.equal(notices.length, 1);
-  assert.equal(notices[0].body.title, "Prompt Composer");
-  assert.equal(notices[0].body.variant, "error");
+  await hooks.config!(config);
+  assert.equal(config.agent!.review!.prompt, "Review ");
+  assert.equal(config.agent!.plan!.prompt, "Plan Body");
+  assert.equal(config.command!.check.template, "Check  Body");
+  assert.equal(toasts.length, 1);
+  assert.equal(toasts[0].body.title, "Prompt Composer");
+  assert.equal(toasts[0].body.variant, "warning");
   assert.match(
-    notices[0].body.message,
-    /^Prompt composition failed\. .*does not exist/,
+    toasts[0].body.message,
+    /^Some includes were not expanded in agent "review", command "check"\. .*"missing\.md" does not exist.* 1 more problem not shown\.$/,
   );
 
   for (const showToast of [
@@ -462,8 +488,11 @@ test("config composition failures show one error toast and still reject without 
       ...context,
       client: { tui: { showToast } },
     } as unknown as PluginInput);
-    await assert.rejects(quiet.config!(config), /does not exist/);
-    assert.deepEqual(config, before);
+    const current: Config = {
+      agent: { review: { prompt: "Review {{include:missing.md}}" } },
+    };
+    await quiet.config!(current);
+    assert.equal(current.agent!.review!.prompt, "Review ");
   }
 });
 
@@ -482,13 +511,26 @@ test("config composition preserves plugin registration without publishing editor
   assert.deepEqual(config.plugin, registration);
 });
 
-test("removed editor reload tokens are not accepted as plugin options", async (t) => {
-  const { root } = await fixture(t);
-  assert.throws(
-    () =>
-      server.server({ directory: root, worktree: root } as PluginInput, {
-        reloadToken: "old-editor-token",
-      }),
-    /does not accept plugin options/,
+test("plugin options are ignored with one warning on the first config hook", async (t) => {
+  const { root, context } = await fixture(t);
+  await writeFile(join(root, ".opencode/prompts/body.md"), "Body");
+  const { input, toasts } = recordingToasts(context);
+  const hooks = await server.server(input, {
+    reloadToken: "old-editor-token",
+    extra: true,
+  });
+  for (let load = 0; load < 2; load++) {
+    const config: Config = {
+      agent: { review: { prompt: "{{include:body.md}}" } },
+    };
+    await hooks.config!(config);
+    assert.equal(config.agent!.review!.prompt, "Body");
+  }
+  assert.equal(toasts.length, 1);
+  assert.equal(toasts[0].body.variant, "warning");
+  assert.equal(
+    toasts[0].body.message,
+    'Plugin options are not supported and were ignored: "reloadToken", "extra".',
   );
+  assert.doesNotMatch(toasts[0].body.message, /old-editor-token/);
 });

@@ -558,3 +558,118 @@ test("reports the ancestor limit only after every checked ancestor succeeds", as
     (error) => error instanceof Error && error.message === `denied ${last}`,
   );
 });
+
+test("lenient discovery leaves out unusable entries and keeps the rest", async (t) => {
+  const f = await fixture(t);
+  const prompts = join(f.global, "prompts");
+  await writeFile(join(f.root, "secret.md"), "secret");
+  await mkdir(join(prompts, ".private"));
+  await writeFile(join(prompts, ".private/body.md"), "Private");
+  await mkdir(join(prompts, "deep", ...Array<string>(32).fill("d")), {
+    recursive: true,
+  });
+  await writeFile(join(prompts, "keep.md"), "Keep");
+  try {
+    await symlink(join(f.root, "secret.md"), join(prompts, "leak.md"));
+    await symlink(
+      join(prompts, ".private/body.md"),
+      join(prompts, "hidden.md"),
+    );
+    await symlink(prompts, join(prompts, "loop"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") {
+      t.skip("Symlink privilege unavailable");
+      return;
+    }
+    throw error;
+  }
+  const warnings: string[] = [];
+  const result = await discoverPrompts(
+    { directory: f.nested, worktree: f.project },
+    f.env,
+    (warning) => warnings.push(warning),
+  );
+  assert.equal(result.files.has("keep.md"), true);
+  assert.equal(result.files.has("review/evidence.md"), true);
+  for (const name of ["leak.md", "hidden.md"]) {
+    assert.equal(result.files.has(name), false, `${name} is left out`);
+  }
+  assert.equal(
+    [...result.files.keys()].some((name) => name.startsWith("loop/")),
+    false,
+  );
+  assert.deepEqual(warnings, [
+    `Ignored ${join(prompts, "deep", ...Array<string>(31).fill("d"))}: it exceeds the directory nesting limit.`,
+    `Ignored ${join(prompts, "hidden.md")}: it resolves to a hidden path.`,
+    `Ignored ${join(prompts, "leak.md")}: it links outside its prompts directory.`,
+  ]);
+});
+
+test("lenient discovery treats a prompts file as absent and reports unreadable directories", async (t) => {
+  const f = await fixture(t);
+  await rm(join(f.custom, "prompts"), { recursive: true });
+  await writeFile(join(f.custom, "prompts"), "not a directory");
+  const unreadable = join(f.global, "prompts/review");
+  const readdir = fs.readdir;
+  t.mock.method(fs, "readdir", async (...args: Parameters<typeof readdir>) => {
+    if (args[0] === unreadable) {
+      throw Object.assign(new Error("denied"), { code: "EACCES" });
+    }
+    return readdir(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  const warnings: string[] = [];
+  const result = await discoverPrompts(
+    { directory: f.nested, worktree: f.project },
+    f.env,
+    (warning) => warnings.push(warning),
+  );
+  assert.equal(
+    result.files.get("review/evidence.md")?.root,
+    join(f.home, ".opencode/prompts"),
+    "the last readable root still wins",
+  );
+  assert.deepEqual(warnings, [
+    `Ignored ${unreadable}: it could not be read (EACCES).`,
+  ]);
+});
+
+test("lenient discovery stops at the entry limit with what it found", async (t) => {
+  const f = await fixture(t);
+  const empty = join(f.root, "empty");
+  const many = join(f.root, "limit/prompts/many");
+  await mkdir(many, { recursive: true });
+  const env = {
+    XDG_CONFIG_HOME: join(f.root, "unused"),
+    OPENCODE_TEST_HOME: empty,
+    OPENCODE_CONFIG_DIR: join(f.root, "limit"),
+    OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+  };
+  const files = 4100;
+  for (let start = 0; start < files; start += 512) {
+    await Promise.all(
+      Array.from({ length: Math.min(512, files - start) }, (_, offset) =>
+        writeFile(
+          join(many, `${String(start + offset).padStart(4, "0")}.md`),
+          "Snippet",
+        ),
+      ),
+    );
+  }
+  const warnings: string[] = [];
+  const result = await discoverPrompts(
+    { directory: empty, worktree: empty },
+    env,
+    (warning) => warnings.push(warning),
+  );
+  assert.equal(result.files.size, 4095);
+  assert.equal(result.files.has("many/4094.md"), true);
+  assert.equal(result.files.has("many/4095.md"), false);
+  assert.deepEqual(warnings, [
+    "The prompts directories have more than 4096 entries; later entries were ignored.",
+  ]);
+});

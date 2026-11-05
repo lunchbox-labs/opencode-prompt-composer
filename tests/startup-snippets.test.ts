@@ -16,6 +16,7 @@ import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
 import type { Config, PluginInput } from "@opencode-ai/plugin";
 import server from "../src/server.ts";
+import { recordingToasts } from "./toasts.ts";
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "prompt-startup-"));
@@ -75,10 +76,10 @@ test("startup snippets survive edits and subsequent plugin factories without fre
   assert.equal(supplied.agent!.review!.prompt, "Profile First evidence");
   assert.equal(supplied.agent!.review!.model, "fixture/next-model");
   const newReference: Config = {
-    command: { new: { template: "{{include:new.md}}" } },
+    command: { new: { template: "New: {{include:new.md}}" } },
   };
-  await assert.rejects(next.config!(newReference), /does not exist/);
-  assert.equal(newReference.command!.new.template, "{{include:new.md}}");
+  await next.config!(newReference);
+  assert.equal(newReference.command!.new.template, "New: ");
 });
 
 test("unused startup snippets are captured before first skill use and preserve current native framing", async (t) => {
@@ -118,23 +119,25 @@ test("invalid unused snippets retain their capture errors after disk repair", as
   ] as const) {
     await writeFile(join(f.directory, name), text);
   }
-  const hooks = await server.server(f.context);
+  const { input, toasts } = recordingToasts(f.context);
+  const hooks = await server.server(input);
   await hooks.config!({ agent: { ordinary: { prompt: "No includes" } } });
+  assert.equal(toasts.length, 0, "unused invalid snippets do not warn");
   for (const name of ["large.md", "nul.md", "utf8.md"]) {
     await writeFile(join(f.directory, name), "Repaired");
     for (const marker of ["include", "include?"]) {
-      const output = skill(`{{${marker}:${name}}}`);
-      const before = structuredClone(output);
-      await assert.rejects(hooks["tool.execute.after"]!(skillInput, output));
-      assert.deepEqual(output, before);
+      const output = skill(`[{{${marker}:${name}}}]`);
+      await hooks["tool.execute.after"]!(skillInput, output);
+      assert.equal(output.output, skill("[]").output);
+      assert.match(toasts.at(-1)!.body.message, /not expanded/);
     }
   }
-  const next = await server.server(f.context);
+  const next = await server.server(input);
   for (const template of ["{{include:large.md}}", "{{include?:large.md}}"]) {
-    await assert.rejects(
-      next.config!({ command: { check: { template } } }),
-      /64 KiB/,
-    );
+    const current: Config = { command: { check: { template } } };
+    await next.config!(current);
+    assert.equal(current.command!.check.template, "");
+    assert.match(toasts.at(-1)!.body.message, /64 KiB/);
   }
 });
 
@@ -160,27 +163,30 @@ test("optional includes compose agents, commands and skills with and without the
   const output = skill(text);
   await hooks["tool.execute.after"]!(skillInput, output);
   assert.equal(output.output, skill(expected).output);
-  for (const [body, error] of [
+  const recorded = recordingToasts(f.context);
+  const warned = await server.server(recorded.input);
+  for (const [body, problem] of [
     ["{{include?:../personal.md}}", /safe relative/],
     ["{{include?:requires.md}}", /"absent\.md" does not exist/],
   ] as const) {
-    await assert.rejects(
-      hooks.config!({ agent: { review: { prompt: body } } }),
-      error,
-    );
-    await assert.rejects(
-      hooks.config!({ command: { check: { template: body } } }),
-      error,
-    );
-    await assert.rejects(
-      hooks["tool.execute.after"]!(skillInput, skill(body)),
-      error,
-    );
+    const text = `Review. ${body}`;
+    const composed: Config = {
+      agent: { review: { prompt: text } },
+      command: { check: { template: text } },
+    };
+    await warned.config!(composed);
+    assert.equal(composed.agent!.review!.prompt, "Review. ");
+    assert.equal(composed.command!.check.template, "Review. ");
+    assert.match(recorded.toasts.at(-1)!.body.message, problem);
+    const output = skill(text);
+    await warned["tool.execute.after"]!(skillInput, output);
+    assert.equal(output.output, skill("Review. ").output);
+    assert.match(recorded.toasts.at(-1)!.body.message, problem);
   }
 });
 
 test(
-  "optional includes fail for present snippets that cannot be read",
+  "optional includes of present snippets that cannot be read are left out with a warning",
   {
     skip:
       process.platform === "win32" || process.getuid?.() === 0
@@ -192,17 +198,22 @@ test(
     const path = join(f.directory, "personal.md");
     await writeFile(path, "Personal");
     await chmod(path, 0o000);
-    const hooks = await server.server(f.context);
-    await assert.rejects(
-      hooks.config!({
-        agent: { review: { prompt: "Review {{include?:personal.md}}" } },
-      }),
+    const { input, toasts } = recordingToasts(f.context);
+    const hooks = await server.server(input);
+    const config: Config = {
+      agent: { review: { prompt: "Review {{include?:personal.md}}" } },
+    };
+    await hooks.config!(config);
+    assert.equal(config.agent!.review!.prompt, "Review ");
+    assert.equal(toasts.length, 1);
+    assert.match(
+      toasts[0].body.message,
       /Could not read prompt include "personal\.md"/,
     );
   },
 );
 
-test("includes fail for present prompt names that are not regular files", async (t) => {
+test("includes of present prompt names that are not regular files are left out with a warning", async (t) => {
   const f = await fixture(t);
   await mkdir(join(f.directory, "personal/review.md"), { recursive: true });
   const names = ["personal/review.md"];
@@ -210,13 +221,19 @@ test("includes fail for present prompt names that are not regular files", async 
     await promisify(execFile)("mkfifo", [join(f.directory, "fifo.md")]);
     names.push("fifo.md");
   }
-  const hooks = await server.server(f.context);
+  const { input, toasts } = recordingToasts(f.context);
+  const hooks = await server.server(input);
   for (const name of names) {
     for (const marker of ["include", "include?"]) {
-      await assert.rejects(
-        hooks.config!({
-          agent: { review: { prompt: `[{{${marker}:${name}}}]` } },
-        }),
+      const current: Config = {
+        agent: { review: { prompt: `[{{${marker}:${name}}}]` } },
+      };
+      const shown = toasts.length;
+      await hooks.config!(current);
+      assert.equal(current.agent!.review!.prompt, "[]");
+      assert.equal(toasts.length, shown + 1);
+      assert.match(
+        toasts.at(-1)!.body.message,
         /must be regular UTF-8 files/,
         "a directory or FIFO at the referenced path is invalid, not absent",
       );
@@ -224,7 +241,7 @@ test("includes fail for present prompt names that are not regular files", async 
   }
 });
 
-test("broken prompt symlinks fail only for includes that use them", async (t) => {
+test("broken prompt symlinks warn only for includes that use them", async (t) => {
   const f = await fixture(t);
   await writeFile(join(f.directory, "body.md"), "Body");
   try {
@@ -243,33 +260,38 @@ test("broken prompt symlinks fail only for includes that use them", async (t) =>
     await symlink(join(f.directory, "loop.md"), join(f.directory, "loop.md"));
   }
   await symlink(join(f.root, "missing"), join(f.directory, "notes"));
-  const hooks = await server.server(f.context);
+  const { input, toasts } = recordingToasts(f.context);
+  const hooks = await server.server(input);
   const current = config();
   await hooks.config!(current);
   assert.equal(current.agent!.review!.prompt, "Review Body");
   const output = skill("{{include:body.md}}");
   await hooks["tool.execute.after"]!(skillInput, output);
   assert.equal(output.output, skill("Body").output);
+  assert.equal(toasts.length, 0);
   for (const name of broken) {
     const unreadable = new RegExp(
       `Could not read prompt include "${name.replace(".", "\\.")}"\\. Check`,
     );
     for (const marker of ["include", "include?"]) {
-      const failsLikeOtherUnreadableNames = `${marker} fails for ${name}, like other present names that cannot be read`;
-      await assert.rejects(
-        hooks.config!({
-          agent: { review: { prompt: `[{{${marker}:${name}}}]` } },
-        }),
+      const warnsLikeOtherUnreadableNames = `${marker} warns for ${name}, like other present names that cannot be read`;
+      const agent: Config = {
+        agent: { review: { prompt: `[{{${marker}:${name}}}]` } },
+      };
+      await hooks.config!(agent);
+      assert.equal(agent.agent!.review!.prompt, "[]");
+      assert.match(
+        toasts.at(-1)!.body.message,
         unreadable,
-        failsLikeOtherUnreadableNames,
+        warnsLikeOtherUnreadableNames,
       );
-      await assert.rejects(
-        hooks["tool.execute.after"]!(
-          skillInput,
-          skill(`{{${marker}:${name}}}`),
-        ),
+      const loaded = skill(`[{{${marker}:${name}}}]`);
+      await hooks["tool.execute.after"]!(skillInput, loaded);
+      assert.equal(loaded.output, skill("[]").output);
+      assert.match(
+        toasts.at(-1)!.body.message,
         unreadable,
-        failsLikeOtherUnreadableNames,
+        warnsLikeOtherUnreadableNames,
       );
     }
   }
@@ -284,7 +306,8 @@ test("startup sources retain per-consumer cycles, byte limits and original error
     join(f.directory, "broken.md"),
     "\r\n\r\n  PRIVATE\r\n  {{include:broken",
   );
-  const hooks = await server.server(f.context);
+  const { input, toasts } = recordingToasts(f.context);
+  const hooks = await server.server(input);
   await hooks.config!({});
   await rm(f.directory, { recursive: true });
   const exact: Config = {
@@ -292,25 +315,35 @@ test("startup sources retain per-consumer cycles, byte limits and original error
   };
   await hooks.config!(exact);
   assert.equal(Buffer.byteLength(exact.command!.check.template), 256 * 1024);
-  for (const [template, expected] of [
-    ["{{include:cycle.md}}", /cycle/],
-    ["{{include:full.md}}".repeat(4) + "x", /256 KiB/],
-    ["{{include:empty.md}}".repeat(257), /count or nesting/],
+  assert.equal(toasts.length, 0);
+  const oversized = "{{include:full.md}}".repeat(4) + "x";
+  for (const [template, composed, problem] of [
+    ["[{{include:cycle.md}}]", "[]", /cycle/],
+    [oversized, oversized, /256 KiB.*native text was kept/],
+    [
+      "{{include:empty.md}}".repeat(256) + "[{{include:empty.md}}]",
+      "[]",
+      /count or nesting/,
+    ],
   ] as const) {
-    await assert.rejects(
-      hooks.config!({ command: { check: { template } } }),
-      expected,
-    );
+    const current: Config = { command: { check: { template } } };
+    await hooks.config!(current);
+    assert.equal(current.command!.check.template, composed);
+    assert.match(toasts.at(-1)!.body.message, problem);
   }
-  await assert.rejects(
-    hooks.config!({ agent: { review: { prompt: "{{include:broken.md}}" } } }),
-    (error: Error) => {
-      assert.match(error.message, /Consumer: agent "review"/);
-      assert.match(error.message, /"broken\.md":4:3/);
-      assert.doesNotMatch(error.message, /PRIVATE/);
-      return true;
-    },
+  const broken: Config = {
+    agent: { review: { prompt: "{{include:broken.md}}" } },
+  };
+  await hooks.config!(broken);
+  assert.equal(
+    broken.agent!.review!.prompt,
+    "PRIVATE\r\n  {{include:broken",
+    "a malformed marker stays literal",
   );
+  const { message } = toasts.at(-1)!.body;
+  assert.match(message, /Consumer: agent "review"/);
+  assert.match(message, /"broken\.md":4:3/);
+  assert.doesNotMatch(message, /PRIVATE/);
 });
 
 test("different projects capture independently at their own first initialization", async (t) => {
@@ -352,7 +385,9 @@ const hooks = await server.server({ directory: process.argv[1], worktree: proces
 const config = { command: { check: { template: '{{include:body.md}} {{include:added.md}}' } } };
 await hooks.config(config);
 assert.equal(config.command.check.template, 'Restarted Added');
-await assert.rejects(hooks.config({ command: { deleted: { template: '{{include:deleted.md}}' } } }), /does not exist/);`;
+const deleted = { command: { deleted: { template: '[{{include:deleted.md}}]' } } };
+await hooks.config(deleted);
+assert.equal(deleted.command.deleted.template, '[]');`;
   await promisify(execFile)(
     process.execPath,
     ["--experimental-strip-types", "--input-type=module", "-e", script, f.root],
@@ -409,28 +444,77 @@ test(
 );
 
 test(
-  "discovery failure stays failed after repair and keeps skill hooks registered",
+  "a prompt linking outside its prompts directory is ignored with a warning while other prompts compose",
   { skip: process.platform === "win32" },
   async (t) => {
     const f = await fixture(t);
     const outside = join(f.root, "outside.md");
     await writeFile(outside, "Outside");
     await symlink(outside, join(f.directory, "body.md"));
-    const hooks = await server.server(f.context);
-    await assert.rejects(hooks.config!({}), /escapes/);
-    await rm(join(f.directory, "body.md"));
-    await writeFile(join(f.directory, "body.md"), "Repaired");
-    const next = await server.server(f.context);
-    await assert.rejects(next.config!({}), /escapes/);
-    await assert.rejects(
-      next["tool.execute.after"]!(skillInput, skill("{{include:body.md}}")),
-      /escapes/,
+    await writeFile(join(f.directory, "other.md"), "Other");
+    const { input, toasts } = recordingToasts(f.context);
+    const hooks = await server.server(input);
+    const current: Config = {
+      agent: { review: { prompt: "{{include:other.md}} {{include:body.md}}" } },
+    };
+    await hooks.config!(current);
+    assert.equal(current.agent!.review!.prompt, "Other ");
+    assert.equal(toasts.length, 1);
+    assert.equal(toasts[0].body.variant, "warning");
+    assert.match(
+      toasts[0].body.message,
+      /^Ignored .*body\.md: it links outside its prompts directory\. Some includes were not expanded in agent "review"\. .*"body\.md" does not exist/,
     );
+    const output = skill("{{include:body.md}}");
+    await hooks["tool.execute.after"]!(skillInput, output);
+    assert.equal(output.output, skill("").output);
+    assert.doesNotMatch(toasts.at(-1)!.body.message, /Outside/);
   },
 );
 
+test("a capture that fails keeps native text and is retried by the next plugin instance", async (t) => {
+  const f = await fixture(t);
+  await writeFile(join(f.directory, "body.md"), "Body");
+  const ancestor = join(f.root, ".opencode");
+  const lstat = fs.lstat;
+  let failing = true;
+  t.mock.method(fs, "lstat", async (...args: Parameters<typeof lstat>) => {
+    if (failing && args[0] === ancestor) {
+      throw Object.assign(new Error("denied"), { code: "EACCES" });
+    }
+    return lstat(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  const { input, toasts } = recordingToasts(f.context);
+  const hooks = await server.server(input);
+  const current = config();
+  const before = structuredClone(current);
+  await hooks.config!(current);
+  assert.deepEqual(current, before);
+  assert.equal(toasts.length, 1);
+  assert.equal(toasts[0].body.variant, "error");
+  assert.match(
+    toasts[0].body.message,
+    /^Prompts could not be loaded, so includes were not expanded\./,
+  );
+  const output = skill("{{include:body.md}}");
+  const unchanged = structuredClone(output);
+  await hooks["tool.execute.after"]!(skillInput, output);
+  assert.deepEqual(output, unchanged);
+  assert.match(toasts.at(-1)!.body.message, /includes were not expanded/);
+  failing = false;
+  const next = await server.server(input);
+  const repaired = config();
+  await next.config!(repaired);
+  assert.equal(repaired.agent!.review!.prompt, "Review Body");
+});
+
 for (const mutation of ["edit", "add"] as const) {
-  test(`startup rejects a snippet ${mutation} during capture before publishing config`, async (t) => {
+  test(`startup captures again after a snippet ${mutation} during capture`, async (t) => {
     const f = await fixture(t);
     const body = join(f.directory, "body.md");
     await writeFile(body, "Startup");
@@ -459,19 +543,64 @@ for (const mutation of ["edit", "add"] as const) {
       t.mock.restoreAll();
       syncBuiltinESMExports();
     });
-    const hooks = await server.server(f.context);
+    const { input, toasts } = recordingToasts(f.context);
+    const hooks = await server.server(input);
     const current = config();
-    const before = structuredClone(current);
-    await assert.rejects(hooks.config!(current), /changed/i);
-    assert.deepEqual(current, before);
+    current.command!.added = { template: "{{include?:new.md}}" };
+    await hooks.config!(current);
+    assert.equal(
+      current.agent!.review!.prompt,
+      mutation === "edit" ? "Review Changed" : "Review Startup",
+    );
+    assert.equal(
+      current.command!.added.template,
+      mutation === "edit" ? "" : "Changed",
+    );
+    assert.equal(toasts.length, 0);
   });
 }
+
+test("startup publishes the latest reads with a warning when snippets keep changing during capture", async (t) => {
+  const f = await fixture(t);
+  const body = join(f.directory, "body.md");
+  await writeFile(body, "Startup");
+  const canonicalBody = await fs.realpath(body);
+  const open = fs.open;
+  let edits = 0;
+  t.mock.method(fs, "open", async (...args: Parameters<typeof open>) => {
+    const file = await open(...args);
+    if (args[0] === canonicalBody) {
+      const close = file.close.bind(file);
+      t.mock.method(file, "close", async () => {
+        await close();
+        await writeFile(body, `Changed ${++edits}`);
+      });
+    }
+    return file;
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  const { input, toasts } = recordingToasts(f.context);
+  const hooks = await server.server(input);
+  const current = config();
+  await hooks.config!(current);
+  assert.match(current.agent!.review!.prompt!, /^Review Changed \d+$/);
+  assert.equal(toasts.length, 1);
+  assert.equal(toasts[0].body.variant, "warning");
+  assert.match(
+    toasts[0].body.message,
+    /^Prompt files kept changing while loading, so the latest reads are used\. Prompt input changed/,
+  );
+});
 
 for (const [from, to] of [
   ["file", "directory"],
   ["directory", "file"],
 ] as const) {
-  test(`startup never publishes a sibling ${from} replaced by a ${to} while discovery walks an earlier directory`, async (t) => {
+  test(`startup publishes the current sibling when a ${from} is replaced by a ${to} while discovery walks an earlier directory`, async (t) => {
     const f = await fixture(t);
     const earlier = join(f.directory, "a");
     const sibling = join(f.directory, "b.md");
@@ -513,15 +642,9 @@ for (const [from, to] of [
         },
       },
     };
-    const before = structuredClone(current);
-    // Discovery may look up b.md before walking a/; a stale result must not be published.
-    try {
-      await hooks.config!(current);
-    } catch (error) {
-      assert.match((error as Error).message, /changed/i);
-      assert.deepEqual(current, before);
-      return;
-    }
+    // Discovery may look up b.md before walking a/; capture then sees the
+    // change and captures again rather than publishing the stale result.
+    await hooks.config!(current);
     assert.equal(current.command!.check.template, "Changed");
   });
 }

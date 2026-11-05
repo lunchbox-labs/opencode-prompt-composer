@@ -861,13 +861,13 @@ test(
     const unreadable = (await api("/config")) as typeof config;
     assert.equal(
       unreadable.agent.review.prompt,
-      agentBody,
-      `a present optional snippet that cannot be read as UTF-8 text fails the whole composition instead of expanding to nothing\n${logs}`,
+      "Use evidence.\n\nReview Project updated\n\nState uncertainty.\n",
+      `a present optional snippet that cannot be read as UTF-8 text is left out while the rest of the prompt composes\n${logs}`,
     );
-    // The host log escapes quotes inside the reported reason.
-    assert.match(
-      logs,
-      /Could not read prompt include \\?"personal\/review\.md\\?"/,
+    assert.equal(
+      unreadable.command.check.template,
+      "Check Project updated $ARGUMENTS {{include:literal.md}}",
+      "other consumers still compose",
     );
   },
 );

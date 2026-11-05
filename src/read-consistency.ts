@@ -3,6 +3,7 @@ import { lstat, open, realpath } from "node:fs/promises";
 import {
   type DiscoveryContext,
   type PromptInventory,
+  type SkippedEntry,
   discoverPrompts,
 } from "./discovery.ts";
 import { SettingsError } from "./errors.ts";
@@ -87,8 +88,9 @@ export async function verifyInventory(
   context: DiscoveryContext,
   inventory: PromptInventory,
   environment: NodeJS.ProcessEnv = process.env,
+  skip?: SkippedEntry,
 ): Promise<void> {
-  const current = await discoverPrompts(context, environment);
+  const current = await discoverPrompts(context, environment, skip);
   const identity = (inventory: typeof current) =>
     JSON.stringify([
       inventory.directories,

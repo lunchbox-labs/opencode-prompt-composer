@@ -1,11 +1,52 @@
 import type { Config } from "@opencode-ai/plugin";
-import { SettingsError, diagnosticName } from "./errors.ts";
+import { diagnosticName } from "./errors.ts";
+import type { SkippedInclude } from "./include-core.ts";
+import { errorMessage } from "./notices.ts";
 
+export type ConsumerExpand = (
+  text: string,
+  consumer: string,
+  skip: SkippedInclude,
+) => Promise<string>;
+
+/** Problems in one consumer, in the order they were found. */
+export interface IncompleteConsumer {
+  consumer: string;
+  problems: string[];
+}
+
+/**
+ * Composes each agent prompt and command template independently. A failing
+ * include expands to nothing within its consumer; a consumer that cannot be
+ * composed at all keeps its native text. Neither affects other consumers.
+ */
 export async function compose(
   config: Config,
-  expand: (text: string, consumer: string) => Promise<string>,
-): Promise<Config> {
+  expand: ConsumerExpand,
+): Promise<{ config: Config; incomplete: IncompleteConsumer[] }> {
   const result = structuredClone(config);
+  const incomplete: IncompleteConsumer[] = [];
+  const composeOne = async (text: string, consumer: string) => {
+    const problems: string[] = [];
+    const report = () => {
+      if (problems.length > 0) {
+        incomplete.push({ consumer, problems });
+      }
+    };
+    try {
+      const composed = await expand(text, consumer, (problem) =>
+        problems.push(problem),
+      );
+      report();
+      return composed;
+    } catch (error) {
+      problems.push(
+        `${errorMessage(error)} Its native text was kept unexpanded.`,
+      );
+      report();
+      return text;
+    }
+  };
   for (const [name, agent] of Object.entries(result.agent ?? {})) {
     if (
       agent === undefined ||
@@ -15,16 +56,19 @@ export async function compose(
     ) {
       continue;
     }
-    agent.prompt = await expand(agent.prompt, `agent ${diagnosticName(name)}`);
+    agent.prompt = await composeOne(
+      agent.prompt,
+      `agent ${diagnosticName(name)}`,
+    );
   }
   for (const [name, command] of Object.entries(result.command ?? {})) {
     if (typeof command.template !== "string") {
-      throw new SettingsError("Native commands must contain valid templates.");
+      continue;
     }
-    command.template = await expand(
+    command.template = await composeOne(
       command.template,
       `command ${diagnosticName(name)}`,
     );
   }
-  return result;
+  return { config: result, incomplete };
 }

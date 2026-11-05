@@ -1,7 +1,7 @@
 import type { Config, Hooks, Plugin, PluginModule } from "@opencode-ai/plugin";
-import { SettingsError } from "./errors.ts";
-import { notifyFailure } from "./notices.ts";
-import { compose } from "./runtime.ts";
+import { diagnosticName } from "./errors.ts";
+import { errorMessage, firstProblem, notify } from "./notices.ts";
+import { type IncompleteConsumer, compose } from "./runtime.ts";
 import { expandSkillBody } from "./skill-body.ts";
 import { startupSnippets } from "./startup-snippets.ts";
 
@@ -24,10 +24,18 @@ function bodies(config: Config): Bodies {
     ),
   };
 }
+function incompleteMessage(incomplete: IncompleteConsumer[]): string {
+  const consumers = incomplete.map((entry) => entry.consumer);
+  const named =
+    consumers.length > 3
+      ? `${consumers.slice(0, 3).join(", ")} and ${consumers.length - 3} more`
+      : consumers.join(", ");
+  return `Some includes were not expanded in ${named}. ${firstProblem(incomplete.flatMap((entry) => entry.problems))}`;
+}
+
 const PromptComposer: Plugin = (input, options = {}) => {
-  if (Object.keys(options).length > 0) {
-    throw new SettingsError("Prompt Composer does not accept plugin options.");
-  }
+  const ignoredOptions = Object.keys(options).map(diagnosticName);
+  let firstConfig = true;
   const context = {
     directory: input.directory,
     worktree: input.worktree,
@@ -57,16 +65,43 @@ const PromptComposer: Plugin = (input, options = {}) => {
           }
         }
       }
-      let composed: Config;
-      try {
-        composed = await compose(native, await startup);
-      } catch (error) {
-        // The host logs and ignores this rejection; tell the user directly.
-        const reason = error instanceof Error ? error.message : String(error);
-        notifyFailure(input, `Prompt composition failed. ${reason}`);
-        throw error;
+      const notices: string[] = [];
+      let variant: "warning" | "error" = "warning";
+      const announce = () => {
+        if (notices.length > 0) {
+          notify(input, notices.join(" "), variant);
+        }
+      };
+      const first = firstConfig;
+      firstConfig = false;
+      if (first && ignoredOptions.length > 0) {
+        notices.push(
+          `Plugin options are not supported and were ignored: ${ignoredOptions.join(", ")}.`,
+        );
       }
-      // Publish only once the entire composition succeeds. Preserve all host metadata.
+      let snippets: Awaited<typeof startup>;
+      try {
+        snippets = await startup;
+      } catch (error) {
+        variant = "error";
+        notices.push(
+          `Prompts could not be loaded, so includes were not expanded. ${errorMessage(error)}`,
+        );
+        announce();
+        return;
+      }
+      if (first) {
+        notices.push(...snippets.warnings);
+      }
+      const { config: composed, incomplete } = await compose(
+        native,
+        snippets.expand,
+      );
+      if (incomplete.length > 0) {
+        notices.push(incompleteMessage(incomplete));
+      }
+      announce();
+      // Preserve all host metadata.
       if (composed.agent !== undefined) {
         config.agent = composed.agent;
       }
@@ -85,13 +120,13 @@ const PromptComposer: Plugin = (input, options = {}) => {
       output.output = await expandSkillBody(
         output.output,
         output.metadata,
-        async (body) => {
-          return (await startup)(
+        async (body, skip) =>
+          (await startup).expand(
             body,
             "skill output (source file unavailable)",
-          );
-        },
-        (reason) => notifyFailure(input, reason),
+            skip,
+          ),
+        (reason) => notify(input, reason),
       );
     },
   } satisfies Hooks);

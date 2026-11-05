@@ -33,6 +33,21 @@ export interface PromptInventory {
 }
 type Lookup =
   { metadata: Stats } | { brokenSymlink: true } | { error: unknown };
+/** Receives a warning for each entry that lenient discovery leaves out. */
+export type SkippedEntry = (warning: string) => void;
+
+/**
+ * An entry lenient discovery can leave out. Without a reason it is left out
+ * silently, because the result matches what is on disk.
+ */
+class SkippableEntryError extends SettingsError {
+  readonly skipReason: string | undefined;
+  constructor(message: string, skipReason?: string) {
+    super(message);
+    this.skipReason = skipReason;
+  }
+}
+class EntryLimitError extends SettingsError {}
 
 const MAX_ENTRIES = 4096;
 // Bounds how many child lookups run at once and how many run ahead of an
@@ -141,18 +156,54 @@ export async function discoveryDirectories(
   return [...new Set(directories)];
 }
 
+function skipWarning(error: unknown, path: string): string | undefined {
+  if (error instanceof SkippableEntryError) {
+    return error.skipReason === undefined
+      ? undefined
+      : `Ignored ${path}: ${error.skipReason}.`;
+  }
+  const code =
+    error instanceof Error && "code" in error && typeof error.code === "string"
+      ? ` (${error.code})`
+      : "";
+  return `Ignored ${path}: it could not be read${code}.`;
+}
+
+/**
+ * Without `skip`, any unusable entry rejects discovery. With it, discovery
+ * leaves the entry out, reports why through `skip` when the user can act on
+ * it, and stops at the entry limit with what it found. Entries that escape or
+ * hide behind their prompts directory are never inspected either way.
+ */
 export async function discoverPrompts(
   context: DiscoveryContext,
   environment: NodeJS.ProcessEnv = process.env,
+  skip?: SkippedEntry,
 ): Promise<PromptInventory> {
   const directories = await discoveryDirectories(context, environment);
   const files = new Map<string, DiscoveredPrompt>();
   const invalid = new Map<string, DiscoveredPrompt>();
   let entries = 0;
-  for (const directory of directories) {
+  const leaveOut = (error: unknown, path: string): void => {
+    if (skip === undefined || error instanceof EntryLimitError) {
+      throw error;
+    }
+    const warning = skipWarning(error, path);
+    if (warning !== undefined) {
+      skip(warning);
+    }
+  };
+  async function discoverRoot(directory: string): Promise<void> {
     const root = join(directory, "prompts");
-    if (!(await exists(root))) {
-      continue;
+    let present: boolean;
+    try {
+      present = await exists(root);
+    } catch (error) {
+      leaveOut(error, root);
+      return;
+    }
+    if (!present) {
+      return;
     }
     let canonicalRoot: string;
     try {
@@ -160,9 +211,10 @@ export async function discoverPrompts(
     } catch (error) {
       // A dangling or looping prompts link provides no prompts, like an absent one.
       if (unresolvable(error)) {
-        continue;
+        return;
       }
-      throw error;
+      leaveOut(error, root);
+      return;
     }
     async function resolveChild(child: string): Promise<string | undefined> {
       try {
@@ -176,7 +228,7 @@ export async function discoverPrompts(
           entry = await lstat(child);
         } catch (missing) {
           if (hasCode(missing, "ENOENT")) {
-            throw new SettingsError(
+            throw new SkippableEntryError(
               `Prompt discovery changed: ${child}. Retry composition.`,
             );
           }
@@ -196,14 +248,16 @@ export async function discoverPrompts(
           return { brokenSymlink: true };
         }
         if (!contained(canonicalRoot, target)) {
-          throw new SettingsError(
+          throw new SkippableEntryError(
             `A discovered prompt escapes its prompts directory: ${child}.`,
+            "it links outside its prompts directory",
           );
         }
         const local = relative(canonicalRoot, target).split(sep);
         if (local.some((part) => part.startsWith("."))) {
-          throw new SettingsError(
+          throw new SkippableEntryError(
             "A discovered prompt resolves to a hidden path.",
+            "it resolves to a hidden path",
           );
         }
         return { metadata: await stat(target) };
@@ -214,20 +268,24 @@ export async function discoverPrompts(
     async function scan(path: string, parents: Set<string>): Promise<void> {
       const canonical = await realpath(path);
       if (!contained(canonicalRoot, canonical)) {
-        throw new SettingsError(
+        throw new SkippableEntryError(
           `A discovered prompt escapes its prompts directory: ${path}.`,
+          "it links outside its prompts directory",
         );
       }
       if (parents.has(canonical) || parents.size >= 32) {
-        throw new SettingsError(
+        throw new SkippableEntryError(
           `Prompt directory cycle or depth limit at ${path}.`,
+          parents.has(canonical)
+            ? undefined
+            : "it exceeds the directory nesting limit",
         );
       }
       const info = await stat(canonical);
       if (!info.isDirectory()) {
         // A child was a directory when looked up, so for a child this means
         // the tree changed during discovery rather than a configuration error.
-        throw new SettingsError(
+        throw new SkippableEntryError(
           parents.size === 0
             ? `Prompt discovery expects a directory: ${path}.`
             : `Prompt discovery changed: ${path}. Retry composition.`,
@@ -251,15 +309,16 @@ export async function discoverPrompts(
         );
         for (const [index, name] of batch.entries()) {
           if (++entries > MAX_ENTRIES) {
-            throw new SettingsError(
+            throw new EntryLimitError(
               `Prompt discovery exceeds ${MAX_ENTRIES} entries.`,
             );
           }
           const result = lookups[index];
-          if ("error" in result) {
-            throw result.error;
-          }
           const child = join(path, name);
+          if ("error" in result) {
+            leaveOut(result.error, child);
+            continue;
+          }
           const metadata = "metadata" in result ? result.metadata : undefined;
           // A broken symlink with a prompt name fails only when an include
           // uses it, like other present names that are not regular files.
@@ -272,12 +331,32 @@ export async function discoverPrompts(
             });
           }
           if (metadata?.isDirectory() === true) {
-            await scan(child, new Set([...parents, canonical]));
+            try {
+              await scan(child, new Set([...parents, canonical]));
+            } catch (error) {
+              leaveOut(error, child);
+            }
           }
         }
       }
     }
-    await scan(root, new Set());
+    try {
+      await scan(root, new Set());
+    } catch (error) {
+      leaveOut(error, root);
+    }
+  }
+  try {
+    for (const directory of directories) {
+      await discoverRoot(directory);
+    }
+  } catch (error) {
+    if (skip === undefined || !(error instanceof EntryLimitError)) {
+      throw error;
+    }
+    skip(
+      `The prompts directories have more than ${MAX_ENTRIES} entries; later entries were ignored.`,
+    );
   }
   for (const [name, prompt] of invalid) {
     if (!files.has(name)) {

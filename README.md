@@ -38,7 +38,7 @@ Mark an include optional with `?` when the snippet may be absent, such as person
 {{include?:personal/review.md}}
 ```
 
-If no discovered prompts directory contains the file, the marker expands to nothing; a developer opts in by adding `~/.config/opencode/prompts/personal/review.md`. Everything else matches `{{include:...}}`: invalid paths, unreadable or invalid files, cycles and limits still fail composition.
+If no discovered prompts directory contains the file, the marker expands to nothing; a developer opts in by adding `~/.config/opencode/prompts/personal/review.md`. Everything else matches `{{include:...}}`: an invalid path, an unreadable or invalid file, a cycle or a limit leaves that include out and shows a warning.
 
 Prompt files live in `prompts/` under OpenCode's configuration directories. Later discovered files override earlier files with the same relative path. See [Discovery](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Discovery) for precedence and limits.
 
@@ -47,6 +47,8 @@ Skill bodies expand through the native `skill` tool; automatically generated ski
 Run `/view-prompts`, choose Agents or Commands, then select a component to read its complete loaded text in a scrollable viewer. Text longer than 65,536 characters, or with a line longer than 4,096 characters, opens as a list of parts. Configured agents are shown by default; use **Show built-in agents** to include native defaults. Skill composition is supported, but the viewer omits skills due to API limitations.
 
 Prompt snippets are captured when the project loads. Restart the OpenCode server after editing snippets or native prompt definitions.
+
+Problems never stop OpenCode from loading a prompt. An include that cannot be expanded is left out, a malformed marker stays as written, and a prompt over the 256 KiB limit keeps its native text. Prompt files that link outside their prompts directory or cannot be read are ignored. Each of these shows a warning toast.
 
 ## Documentation
 
