@@ -6,7 +6,8 @@ const END = "\n</skill_files>\n</skill_content>";
 const UNKNOWN_FRAMING =
   "The skill output has unknown or incomplete framing. Its includes were not expanded.";
 
-export type SkillNotice = (reason: string) => void;
+/** `details` repeats the reason with every problem, for the server log. */
+export type SkillNotice = (reason: string, details?: string) => void;
 
 // OpenCode's V1 skill tool (1.19.0 and 1.19.3) supplies name/dir metadata,
 // but no structured body. Match its complete framing without rereading a
@@ -15,7 +16,11 @@ export type SkillNotice = (reason: string) => void;
 export async function expandSkillBody(
   output: string,
   metadata: unknown,
-  expand: (body: string, skip: SkippedInclude) => Promise<string>,
+  expand: (
+    body: string,
+    consumer: string,
+    skip: SkippedInclude,
+  ) => Promise<string>,
   notify?: SkillNotice,
 ): Promise<string> {
   if (!hasIncludeMarker(output)) {
@@ -31,8 +36,12 @@ export async function expandSkillBody(
     "truncated" in metadata &&
     metadata.truncated === true
   ) {
+    const skill =
+      "name" in metadata && typeof metadata.name === "string"
+        ? `Skill ${diagnosticName(metadata.name)}`
+        : "The skill";
     return unchanged(
-      "The skill output was truncated, so its includes were not expanded. Reduce the skill's size to compose it.",
+      `${skill} output was truncated, so its includes were not expanded. Reduce the skill's size to compose it.`,
     );
   }
   if (
@@ -101,20 +110,33 @@ export async function expandSkillBody(
   if (!hasIncludeMarker(body)) {
     return output;
   }
+  const consumer = `skill ${diagnosticName(metadata.name)}`;
   const skill = `Skill ${diagnosticName(metadata.name)}`;
   const problems: string[] = [];
   let expanded: string;
   try {
-    expanded = await expand(body, (problem) => problems.push(problem));
+    expanded = await expand(body, consumer, (problem) =>
+      problems.push(problem),
+    );
   } catch (error) {
     return unchanged(
       `${skill} includes were not expanded. ${errorMessage(error)}`,
     );
   }
+  // A skill left with no text would load as an empty instruction.
+  const emptied = problems.length > 0 && expanded.trim() === "";
+  if (emptied) {
+    problems.push("Nothing else was left, so its native text was kept.");
+  }
   if (problems.length > 0) {
+    const reason = `${skill} has includes that were not expanded.`;
     notify?.(
-      `${skill} has includes that were not expanded. ${firstProblem(problems)}`,
+      `${reason} ${firstProblem(problems)}`,
+      [reason, ...problems].join("\n- "),
     );
+  }
+  if (emptied) {
+    return output;
   }
   return output.slice(0, prefix.length) + expanded + output.slice(boundary);
 }

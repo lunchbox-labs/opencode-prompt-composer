@@ -18,7 +18,8 @@ export interface IncompleteConsumer {
 /**
  * Composes each agent prompt and command template independently. A failing
  * include expands to nothing within its consumer; a consumer that cannot be
- * composed at all keeps its native text. Neither affects other consumers.
+ * composed at all, or would be left empty, keeps its native text. Neither
+ * affects other consumers.
  */
 export async function compose(
   config: Config,
@@ -37,6 +38,12 @@ export async function compose(
       const composed = await expand(text, consumer, (problem) =>
         problems.push(problem),
       );
+      // An agent or command left with no text would silently lose its role.
+      if (problems.length > 0 && composed.trim() === "") {
+        problems.push("Nothing else was left, so its native text was kept.");
+        report();
+        return text;
+      }
       report();
       return composed;
     } catch (error) {

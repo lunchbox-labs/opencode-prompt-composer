@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { type TestContext, test } from "node:test";
 import type { Config, PluginInput } from "@opencode-ai/plugin";
 import { discoverPrompts } from "../src/discovery.ts";
+import { expandWithReader } from "../src/include-core.ts";
 import { expandIncludes } from "../src/includes.ts";
 import { compose } from "../src/runtime.ts";
 import server from "../src/server.ts";
@@ -320,7 +321,7 @@ test("a failing nested include leaves out only itself and reports the include ch
   assert.equal(toasts.length, 1);
   assert.match(
     toasts[0].body.message,
-    /"missing\.md" does not exist.*Consumer: agent "review"\. at "body\.md":1:7 Include chain: "body\.md" -> "missing\.md"\.$/,
+    /^Some includes were not expanded in agent "review"\. Prompt "missing\.md" does not exist in the discovered prompts directories\. In "body\.md" at 1:7\. Include chain: "body\.md" -> "missing\.md"\.$/,
   );
 });
 
@@ -345,7 +346,7 @@ test("skill include failures warn with honest consumer context", async (t) => {
     message,
     /^Skill "evidence" has includes that were not expanded/,
   );
-  assert.match(message, /skill output.*source file unavailable/);
+  assert.match(message, /"missing\.md" does not exist/);
   assert.doesNotMatch(message, /PRIVATE|SKILL\.md/);
 });
 
@@ -475,7 +476,7 @@ test("config include failures show one warning toast naming every incomplete con
   assert.equal(toasts[0].body.variant, "warning");
   assert.match(
     toasts[0].body.message,
-    /^Some includes were not expanded in agent "review", command "check"\. .*"missing\.md" does not exist.* 1 more problem not shown\.$/,
+    /^Some includes were not expanded in 2 prompts\. agent "review": Prompt "missing\.md" does not exist.* See the OpenCode log for 1 more\.$/,
   );
 
   for (const showToast of [
@@ -533,4 +534,32 @@ test("plugin options are ignored with one warning on the first config hook", asy
     'Plugin options are not supported and were ignored: "reloadToken", "extra".',
   );
   assert.doesNotMatch(toasts[0].body.message, /old-editor-token/);
+});
+
+test("a fan-out past the include limit reports the limit once", async () => {
+  // Each of the 64 snippets includes all 64, far past 256 occurrences.
+  const fan = Array.from({ length: 64 }, (_, i) => `{{include:s${i}.md}}`);
+  const text = fan.join(" ");
+  const { config, incomplete } = await compose(
+    { agent: { review: { prompt: `Review ${text}` } } },
+    (body, consumer, skip) =>
+      expandWithReader(
+        body,
+        (reference) =>
+          Promise.resolve({
+            path: reference,
+            canonicalPath: reference,
+            text,
+            mode: 0o644,
+          }),
+        consumer,
+        skip,
+      ),
+  );
+  assert.match(config.agent!.review!.prompt!, /^Review /);
+  assert.equal(incomplete.length, 1);
+  const limits = incomplete[0].problems.filter((problem) =>
+    problem.includes("count or nesting limit"),
+  );
+  assert.equal(limits.length, 1);
 });

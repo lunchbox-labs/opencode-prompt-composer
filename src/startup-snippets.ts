@@ -106,8 +106,13 @@ async function capture(
       if (attempt < CAPTURE_ATTEMPTS) {
         continue;
       }
+      // The verification advice targets library callers; here, a restart retries.
+      const reason = errorMessage(attempted.changed).replace(
+        / Retry composition\.$/,
+        "",
+      );
       warnings.push(
-        `Prompt files kept changing while loading, so the latest reads are used. ${errorMessage(attempted.changed)}`,
+        `Prompt files could not be confirmed unchanged after ${CAPTURE_ATTEMPTS} reads, so the latest reads are used. Restart OpenCode once edits settle. ${reason}`,
       );
     }
     return { expand: attempted.expand, warnings };

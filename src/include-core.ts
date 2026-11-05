@@ -37,6 +37,8 @@ interface Expansion {
   includes: number;
   consumer?: string;
   skip?: SkippedInclude;
+  /** Set once a skipped include reported the count or nesting limit. */
+  limitReported?: boolean;
 }
 
 interface IncludeFrame {
@@ -45,6 +47,7 @@ interface IncludeFrame {
 }
 
 class IncludeError extends SettingsError {}
+class IncludeLimitError extends SettingsError {}
 
 function promptSize(bytes: number): void {
   if (bytes > MAX_PROMPT_BYTES) {
@@ -212,9 +215,14 @@ function diagnostic(
   const location =
     source === undefined || frame === undefined
       ? ""
-      : ` at ${diagnosticName(frame.reference)}:${sourcePosition(source.sourceText, source.offset + position)}`;
+      : ` In ${diagnosticName(frame.reference)} at ${sourcePosition(source.sourceText, source.offset + position)}.`;
+  // A caller that skips includes reports the consumer alongside each problem.
+  const consumer =
+    context.consumer === undefined || context.skip !== undefined
+      ? ""
+      : ` Consumer: ${context.consumer}.`;
   return new IncludeError(
-    `${error.message}${context.consumer === undefined ? "" : ` Consumer: ${context.consumer}.`}${location}${chain.length === 0 ? "" : ` Include chain: ${chain.join(" -> ")}.`}`,
+    `${error.message}${consumer}${location}${chain.length === 0 ? "" : ` Include chain: ${chain.join(" -> ")}.`}`,
     { cause: error },
   );
 }
@@ -229,21 +237,21 @@ async function expand(
   let reference: string | undefined;
   const include = async (
     marker: string,
-    included: string | undefined,
+    target: string | undefined,
   ): Promise<string> => {
     const optional = marker.startsWith("{{include?");
-    if (included === undefined) {
+    if (target === undefined) {
       throw new SettingsError(
         `A prompt include has invalid syntax. Use {{include${optional ? "?" : ""}:folder/prompt.md}}.`,
       );
     }
     context.includes += 1;
     if (context.includes > MAX_INCLUDES || stack.length >= MAX_INCLUDE_DEPTH) {
-      throw new SettingsError(
+      throw new IncludeLimitError(
         "The prompt include count or nesting limit was exceeded.",
       );
     }
-    const loaded = await snippet(included, context, optional);
+    const loaded = await snippet(target, context, optional);
     if (loaded === undefined) {
       return "";
     }
@@ -255,7 +263,7 @@ async function expand(
     return expand(
       loaded.text,
       context,
-      [...stack, { path: loaded.path, reference: included }],
+      [...stack, { path: loaded.path, reference: target }],
       loaded,
     );
   };
@@ -302,10 +310,20 @@ async function expand(
           ) {
             throw error;
           }
-          context.skip(
-            diagnostic(error, context, stack, reference, source, position)
-              .message,
-          );
+          // Past the limit every later marker fails the same way; describing
+          // each one would cost time proportional to the whole fan-out.
+          const repeated =
+            error instanceof IncludeLimitError &&
+            context.limitReported === true;
+          if (error instanceof IncludeLimitError) {
+            context.limitReported = true;
+          }
+          if (!repeated) {
+            context.skip(
+              diagnostic(error, context, stack, reference, source, position)
+                .message,
+            );
+          }
           if (reference === undefined) {
             append(marker);
           }

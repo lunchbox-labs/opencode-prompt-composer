@@ -236,7 +236,7 @@ test("malformed nested markers report original snippet positions without body te
     expandIncludes("{{include:a.md}}", sources),
     (error: Error) => {
       assert.match(error.message, /invalid syntax/);
-      assert.match(error.message, /a\.md.*:4:3/);
+      assert.match(error.message, /In "a\.md" at 4:3\./);
       assert.doesNotMatch(error.message, /PRIVATE|broken/);
       return true;
     },
@@ -382,7 +382,7 @@ test("nested byte-limit errors retain the marker position, consumer and include 
     {
       name: "PromptComposerError",
       message:
-        'The composed prompt exceeds the 256 KiB limit. Consumer: agent review. at "outer.md":6:1 Include chain: "outer.md" -> "full.md".',
+        'The composed prompt exceeds the 256 KiB limit. Consumer: agent review. In "outer.md" at 6:1. Include chain: "outer.md" -> "full.md".',
     },
   );
 });

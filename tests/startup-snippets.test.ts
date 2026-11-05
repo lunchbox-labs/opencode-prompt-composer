@@ -136,7 +136,8 @@ test("invalid unused snippets retain their capture errors after disk repair", as
   for (const template of ["{{include:large.md}}", "{{include?:large.md}}"]) {
     const current: Config = { command: { check: { template } } };
     await next.config!(current);
-    assert.equal(current.command!.check.template, "");
+    // Nothing else is left, so the command keeps its native text.
+    assert.equal(current.command!.check.template, template);
     assert.match(toasts.at(-1)!.body.message, /64 KiB/);
   }
 });
@@ -341,8 +342,8 @@ test("startup sources retain per-consumer cycles, byte limits and original error
     "a malformed marker stays literal",
   );
   const { message } = toasts.at(-1)!.body;
-  assert.match(message, /Consumer: agent "review"/);
-  assert.match(message, /"broken\.md":4:3/);
+  assert.match(message, /in agent "review"/);
+  assert.match(message, /In "broken\.md" at 4:3\./);
   assert.doesNotMatch(message, /PRIVATE/);
 });
 
@@ -463,11 +464,11 @@ test(
     assert.equal(toasts[0].body.variant, "warning");
     assert.match(
       toasts[0].body.message,
-      /^Ignored .*body\.md: it links outside its prompts directory\. Some includes were not expanded in agent "review"\. .*"body\.md" does not exist/,
+      /^Some includes were not expanded in agent "review"\. .*"body\.md" does not exist.* Ignored .*body\.md: it links outside its prompts directory\.$/,
     );
-    const output = skill("{{include:body.md}}");
+    const output = skill("Use {{include:body.md}}");
     await hooks["tool.execute.after"]!(skillInput, output);
-    assert.equal(output.output, skill("").output);
+    assert.equal(output.output, skill("Use ").output);
     assert.doesNotMatch(toasts.at(-1)!.body.message, /Outside/);
   },
 );
@@ -499,7 +500,7 @@ test("a capture that fails keeps native text and is retried by the next plugin i
   assert.equal(toasts[0].body.variant, "error");
   assert.match(
     toasts[0].body.message,
-    /^Prompts could not be loaded, so includes were not expanded\./,
+    /^Prompt files could not be read, so no includes were expanded; agents, commands and skills keep their native text\./,
   );
   const output = skill("{{include:body.md}}");
   const unchanged = structuredClone(output);
@@ -592,7 +593,7 @@ test("startup publishes the latest reads with a warning when snippets keep chang
   assert.equal(toasts[0].body.variant, "warning");
   assert.match(
     toasts[0].body.message,
-    /^Prompt files kept changing while loading, so the latest reads are used\. Prompt input changed/,
+    /^Prompt files could not be confirmed unchanged after 3 reads, so the latest reads are used\. Restart OpenCode once edits settle\. Prompt input changed: .*[^.]\.$/,
   );
 });
 
@@ -690,5 +691,34 @@ for (let index = 0; index < 800; index++) {
         },
       },
     );
+  },
+);
+
+test(
+  "many ignored entries do not hide which prompt lost an include",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const f = await fixture(t);
+    const outside = join(f.root, "outside.md");
+    await writeFile(outside, "Outside");
+    for (let index = 0; index < 10; index++) {
+      await symlink(
+        outside,
+        join(f.directory, `a-long-link-name-to-fill-the-toast-${index}.md`),
+      );
+    }
+    const { input, toasts } = recordingToasts(f.context);
+    const hooks = await server.server(input);
+    const current: Config = {
+      agent: { review: { prompt: "Review {{include:missing.md}}" } },
+    };
+    await hooks.config!(current);
+    assert.equal(current.agent!.review!.prompt, "Review ");
+    assert.equal(toasts.length, 1);
+    assert.match(
+      toasts[0].body.message,
+      /^Some includes were not expanded in agent "review"\. Prompt "missing\.md" does not exist/,
+    );
+    assert.match(toasts[0].body.message, /See the OpenCode log for 9 more\./);
   },
 );

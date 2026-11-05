@@ -302,7 +302,7 @@ test("keeps the composed body and summarizes the includes it left out", async ()
     await expandSkillBody(
       original,
       metadata,
-      async (_body, skip) => {
+      async (_body, _consumer, skip) => {
         skip("First problem.");
         skip("Second problem.");
         skip("Third problem.");
@@ -313,6 +313,26 @@ test("keeps the composed body and summarizes the includes it left out", async ()
     nativeOutput("Partly expanded"),
   );
   assert.deepEqual(notices, [
-    'Skill "evidence" has includes that were not expanded. First problem. 2 more problems not shown.',
+    'Skill "evidence" has includes that were not expanded. First problem. See the OpenCode log for 2 more.',
+  ]);
+});
+
+test("keeps the native body when every include was left out and nothing else remains", async () => {
+  const original = nativeOutput("{{include:missing.md}}");
+  const notices: string[] = [];
+  assert.equal(
+    await expandSkillBody(
+      original,
+      metadata,
+      async (_body, _consumer, skip) => {
+        skip("Missing.");
+        return " ";
+      },
+      (reason) => notices.push(reason),
+    ),
+    original,
+  );
+  assert.deepEqual(notices, [
+    'Skill "evidence" has includes that were not expanded. Missing. See the OpenCode log for 1 more.',
   ]);
 });

@@ -1,6 +1,11 @@
 import type { Config, Hooks, Plugin, PluginModule } from "@opencode-ai/plugin";
 import { diagnosticName } from "./errors.ts";
-import { errorMessage, firstProblem, notify } from "./notices.ts";
+import {
+  type NoticeVariant,
+  errorMessage,
+  firstProblem,
+  notify,
+} from "./notices.ts";
 import { type IncompleteConsumer, compose } from "./runtime.ts";
 import { expandSkillBody } from "./skill-body.ts";
 import { startupSnippets } from "./startup-snippets.ts";
@@ -24,13 +29,30 @@ function bodies(config: Config): Bodies {
     ),
   };
 }
-function incompleteMessage(incomplete: IncompleteConsumer[]): string {
-  const consumers = incomplete.map((entry) => entry.consumer);
-  const named =
-    consumers.length > 3
-      ? `${consumers.slice(0, 3).join(", ")} and ${consumers.length - 3} more`
-      : consumers.join(", ");
-  return `Some includes were not expanded in ${named}. ${firstProblem(incomplete.flatMap((entry) => entry.problems))}`;
+interface Notice {
+  toast: string;
+  details: string;
+}
+
+function incompleteNotice(incomplete: IncompleteConsumer[]): Notice {
+  const problems = incomplete.flatMap(({ consumer, problems }) =>
+    problems.map((problem) => `${consumer}: ${problem}`),
+  );
+  const toast =
+    incomplete.length === 1
+      ? `Some includes were not expanded in ${incomplete[0].consumer}. ${firstProblem(incomplete[0].problems)}`
+      : `Some includes were not expanded in ${incomplete.length} prompts. ${firstProblem(problems)}`;
+  return {
+    toast,
+    details: ["Some includes were not expanded.", ...problems].join("\n- "),
+  };
+}
+
+function warningsNotice(warnings: readonly string[]): Notice {
+  return {
+    toast: firstProblem(warnings),
+    details: warnings.join("\n"),
+  };
 }
 
 const PromptComposer: Plugin = (input, options = {}) => {
@@ -65,40 +87,48 @@ const PromptComposer: Plugin = (input, options = {}) => {
           }
         }
       }
-      const notices: string[] = [];
-      let variant: "warning" | "error" = "warning";
-      const announce = () => {
+      const notices: Notice[] = [];
+      const announce = (variant: NoticeVariant = "warning") => {
         if (notices.length > 0) {
-          notify(input, notices.join(" "), variant);
+          notify(
+            input,
+            notices.map((notice) => notice.toast).join(" "),
+            variant,
+            notices.map((notice) => notice.details).join("\n"),
+          );
         }
       };
       const first = firstConfig;
       firstConfig = false;
-      if (first && ignoredOptions.length > 0) {
-        notices.push(
-          `Plugin options are not supported and were ignored: ${ignoredOptions.join(", ")}.`,
-        );
-      }
+      const optionsNotice =
+        first && ignoredOptions.length > 0
+          ? `Plugin options are not supported and were ignored: ${ignoredOptions.join(", ")}.`
+          : undefined;
       let snippets: Awaited<typeof startup>;
       try {
         snippets = await startup;
       } catch (error) {
-        variant = "error";
-        notices.push(
-          `Prompts could not be loaded, so includes were not expanded. ${errorMessage(error)}`,
-        );
-        announce();
+        const failure = `Prompt files could not be read, so no includes were expanded; agents, commands and skills keep their native text. ${errorMessage(error)}`;
+        notices.push({ toast: failure, details: failure });
+        if (optionsNotice !== undefined) {
+          notices.push({ toast: optionsNotice, details: optionsNotice });
+        }
+        announce("error");
         return;
-      }
-      if (first) {
-        notices.push(...snippets.warnings);
       }
       const { config: composed, incomplete } = await compose(
         native,
         snippets.expand,
       );
+      // Most actionable first: a toast is cut off after 600 characters.
       if (incomplete.length > 0) {
-        notices.push(incompleteMessage(incomplete));
+        notices.push(incompleteNotice(incomplete));
+      }
+      if (first && snippets.warnings.length > 0) {
+        notices.push(warningsNotice(snippets.warnings));
+      }
+      if (optionsNotice !== undefined) {
+        notices.push({ toast: optionsNotice, details: optionsNotice });
       }
       announce();
       // Preserve all host metadata.
@@ -120,13 +150,9 @@ const PromptComposer: Plugin = (input, options = {}) => {
       output.output = await expandSkillBody(
         output.output,
         output.metadata,
-        async (body, skip) =>
-          (await startup).expand(
-            body,
-            "skill output (source file unavailable)",
-            skip,
-          ),
-        (reason) => notify(input, reason),
+        async (body, consumer, skip) =>
+          (await startup).expand(body, consumer, skip),
+        (reason, details) => notify(input, reason, "warning", details),
       );
     },
   } satisfies Hooks);
