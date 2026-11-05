@@ -126,7 +126,8 @@ export async function expandSkillBody(
   // A skill left with no text would load as an empty instruction.
   const emptied = problems.length > 0 && expanded.trim() === "";
   if (emptied) {
-    problems.push("Nothing else was left, so its native text was kept.");
+    // Lead with the fallback so the toast says the marker text remains.
+    problems[0] = `Its native text was kept because nothing else was left. ${problems[0]}`;
   }
   if (problems.length > 0) {
     const reason = `${skill} has includes that were not expanded.`;

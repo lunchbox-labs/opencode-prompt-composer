@@ -138,7 +138,10 @@ test("invalid unused snippets retain their capture errors after disk repair", as
     await next.config!(current);
     // Nothing else is left, so the command keeps its native text.
     assert.equal(current.command!.check.template, template);
-    assert.match(toasts.at(-1)!.body.message, /64 KiB/);
+    assert.match(
+      toasts.at(-1)!.body.message,
+      /in command "check"\. Its native text was kept because nothing else was left\. .*64 KiB/,
+    );
   }
 });
 

@@ -333,6 +333,6 @@ test("keeps the native body when every include was left out and nothing else rem
     original,
   );
   assert.deepEqual(notices, [
-    'Skill "evidence" has includes that were not expanded. Missing. See the OpenCode log for 1 more.',
+    'Skill "evidence" has includes that were not expanded. Its native text was kept because nothing else was left. Missing.',
   ]);
 });

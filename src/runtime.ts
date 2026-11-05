@@ -40,7 +40,8 @@ export async function compose(
       );
       // An agent or command left with no text would silently lose its role.
       if (problems.length > 0 && composed.trim() === "") {
-        problems.push("Nothing else was left, so its native text was kept.");
+        // Lead with the fallback so the toast says the marker text remains.
+        problems[0] = `Its native text was kept because nothing else was left. ${problems[0]}`;
         report();
         return text;
       }
