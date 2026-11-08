@@ -30,34 +30,14 @@ Review the supplied changes.
 Distinguish observed behavior from assumptions.
 ```
 
-Includes accept relative `.md` and `.txt` paths and expand recursively. Each included file is trimmed at its edges; surrounding text determines spacing. Escape a literal marker with `\{{include:review.md}}`.
-
-Mark an include optional with `?` when the snippet may be absent, such as personal guidance in a shared project agent:
-
-```markdown
-{{include?:personal/review.md}}
-```
-
-If no discovered prompts directory contains the file, the marker expands to nothing; a developer opts in by adding `~/.config/opencode/prompts/personal/review.md`. Everything else matches `{{include:...}}`: an invalid path, an unreadable or invalid file, a cycle, or the include count or depth limit leaves that include out and shows a warning.
-
-Prompt files live in `prompts/` under OpenCode's configuration directories. Later discovered files override earlier files with the same relative path. See [Discovery](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Discovery) for precedence and limits.
-
-Skill bodies expand through the native `skill` tool; automatically generated skill slash commands do not expand includes, and running one that contains include markers shows a warning once per skill.
-
-Run `/view-prompts`, choose Agents or Commands, then select a component to read its complete loaded text in a scrollable viewer. Text longer than 65,536 characters, or with a line longer than 4,096 characters, opens as a list of parts. Configured agents are shown by default; use **Show built-in agents** to include native defaults. Skill composition is supported, but the viewer omits skills due to API limitations.
-
-Prompt snippets are captured when the project loads. Restart the OpenCode server after editing snippets or native prompt definitions.
-
-Problems never stop OpenCode from loading a prompt. An include that cannot be expanded is left out, a malformed marker stays as written, and a prompt over the 256 KiB limit, or one with nothing left once failed includes are left out, keeps its native text. Prompt entries that link outside their prompts directory or cannot be listed are ignored. Each of these shows a warning toast, and the OpenCode log lists every problem. If the prompts directories cannot be read at all, an error toast appears and agents, commands and skills keep their native text. Plugin options are not supported; any given are ignored with a warning.
+Use `{{include?:personal/review.md}}` for an include that may be absent, and run `/view-prompts` to read the loaded agent and command text. Restart the OpenCode server after editing snippets. A problem with an include leaves it out with a warning toast; it never stops a prompt from loading.
 
 ## Documentation
 
-- [Usage and native file references](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Usage)
-- [Discovery and overrides](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Discovery)
-- [Review guidance example](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Review-guidance)
-- [On-demand verification skill example](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/On-demand-verification)
-- [Downloads](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Downloads)
+The [wiki](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki) has the full guides:
 
-Runnable projects are in [docs/examples](docs/examples/).
-
-Contributor and maintainer guidance is in the [Developer wiki](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Developer).
+- [Usage](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Usage): includes, optional includes, the prompt viewer and native file references.
+- [Discovery](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Discovery): prompt directories, precedence and limits.
+- [Migration](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Migration): older Prompt Composer settings and Config Composer ordering.
+- [Review guidance](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Review-guidance) and [On-demand verification](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/On-demand-verification): walkthroughs of the runnable projects in [docs/examples](docs/examples/).
+- [Developer](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Developer): development, compatibility testing and publishing.

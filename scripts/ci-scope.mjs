@@ -10,7 +10,8 @@ import { promisify } from "node:util";
 // test in the ungated check job asserts the pack contents, so such a pull request cannot
 // pass Check while breaking a native job. Every other path keeps the matrix: workflows,
 // scripts, package metadata and the documented examples all feed at least one check
-// that exercises the installed package.
+// that exercises the installed package. Wiki pages under docs/wiki/ are not packed and
+// no check reads them.
 export const documentationFiles = Object.freeze([
   "README.md",
   "AGENTS.md",
@@ -18,11 +19,20 @@ export const documentationFiles = Object.freeze([
   ".github/CODEOWNERS",
 ]);
 
+export const documentationDirectories = Object.freeze(["docs/wiki/"]);
+
+function isDocumentation(file) {
+  return (
+    documentationFiles.includes(file) ||
+    documentationDirectories.some((directory) => file.startsWith(directory))
+  );
+}
+
 export function nativeChecksRequired(changedFiles) {
   // An empty comparison means the diff did not describe the pull request; run everything.
   return (
     changedFiles.length === 0 ||
-    changedFiles.some((file) => !documentationFiles.includes(file))
+    changedFiles.some((file) => !isDocumentation(file))
   );
 }
 

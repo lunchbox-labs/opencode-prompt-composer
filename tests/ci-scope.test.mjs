@@ -14,6 +14,10 @@ import {
 test("pull requests that change only documentation skip the native matrix", () => {
   assert.equal(nativeChecksRequired(["README.md"]), false);
   assert.equal(nativeChecksRequired([...documentationFiles]), false);
+  assert.equal(
+    nativeChecksRequired(["docs/wiki/Usage.md", "docs/wiki/_Sidebar.md"]),
+    false,
+  );
 });
 
 test("every other change keeps the native matrix", () => {
@@ -26,6 +30,8 @@ test("every other change keeps the native matrix", () => {
     ".github/workflows/check.yml",
     "docs/examples/review/.opencode/agents/review.md",
     "docs/README.md",
+    "docs/wiki.md",
+    ".github/workflows/wiki.yml",
   ];
   for (const file of files) {
     assert.equal(nativeChecksRequired([file]), true, file);
