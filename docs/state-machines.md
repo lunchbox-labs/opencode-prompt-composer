@@ -25,16 +25,22 @@ stateDiagram-v2
 
 ## Capture attempts
 
-`capture()` makes up to `CAPTURE_ATTEMPTS` (3) attempts. Each one discovers files leniently, reads each file into a source or an error, then re-reads the successful reads and the inventory to confirm nothing changed. A change, including a re-read that now fails, starts another attempt; on the last attempt the latest reads are kept with a warning to restart OpenCode once edits settle. Failed reads are kept as they are. The result is frozen inside the `expand` closure, and an error entry is thrown again each time an include uses it.
+`capture()` makes up to `CAPTURE_ATTEMPTS` (3) attempts. Each one discovers files leniently, reads each file into a source or an error, then confirms nothing changed:
+
+- Successful reads are re-read; one that now differs or fails is a change.
+- Failed reads are then read again, as when an editor was saving the file mid-read. A read that failed because the file was replaced between being checked and opened is always a change; any other failed read is a change when it now succeeds or fails with a different message. A failure that repeats unchanged, such as an invalid or unreadable file, is kept.
+- The inventory is discovered again; a different set of names or paths is a change.
+
+A change starts another attempt. On the last attempt the latest reads are kept with a warning to restart OpenCode once edits settle. The result is frozen inside the `expand` closure, and an error entry is thrown again each time an include uses it; an entry for a file that was still being replaced says to restart OpenCode once edits settle, since every later hook reuses the capture.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Attempt
     Attempt --> [*]: discovery throws, capture rejects
     Attempt --> Verify
-    Verify --> Attempt: reads or inventory changed, attempts left
-    Verify --> Published: unchanged
-    Verify --> PublishedWithWarning: changed on the last attempt
+    Verify --> Attempt: reads, failed reads or inventory changed, attempts left
+    Verify --> Published: unchanged, repeated failures kept
+    Verify --> PublishedWithWarning: changed on the last attempt, restart warning
     Published --> [*]
     PublishedWithWarning --> [*]
 ```
@@ -46,6 +52,7 @@ Each factory run in `src/server.ts` holds:
 - `startup`: the shared capture promise for this project.
 - `firstConfig`: true until the first config hook, so option and capture warnings are toasted once per instance.
 - `snapshots`: a `WeakMap` from a config object to its native and applied bodies, so a second config hook on the same object restores the native bodies before composing again.
+- `warnedSkillCommands`: the skill commands already warned about in this instance, empty after each reload.
 
 The config hook awaits `startup`. If it rejected, the hook shows an error toast and leaves the config unchanged. Otherwise it composes, shows any warnings, writes `config.agent` and `config.command` and records the snapshot. `tool.execute.after` for the skill tool expands includes in skill output from the same frozen capture, or returns the native output with a toast.
 
@@ -58,6 +65,18 @@ stateDiagram-v2
     NativeKept --> AwaitCapture: later config hook, rejects again
     Composed --> AwaitCapture: later config hook, native restored first on the same object
     Composed --> Composed: skill output expanded or kept with a toast
+```
+
+`command.execute.before` never changes the command and never throws. When a command's text or subtask prompt holds an include marker and the host lists the command with `source: "skill"`, the first such run of each skill in the instance shows a warning toast that its markers were sent as written; later runs of that skill are silent until a reload, so the diagram below is kept per skill. Configured commands, other sources, commands without markers and a command list that cannot be read never warn, and a command without markers is not looked up.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Unwarned: factory
+    Unwarned --> Unwarned: no marker, not a skill command, or lookup failed
+    Unwarned --> Warned: skill command with markers, warning toast
+    Warned --> Warned: later runs of the same skill, no toast
+    Warned --> [*]: instance reload
+    Unwarned --> [*]: instance reload
 ```
 
 ## Composition and expansion
