@@ -31,7 +31,7 @@
   },
   "files": [
     "dist",
-    "docs",
+    "docs/examples",
     "README.md",
     "LICENSE"
   ],
