@@ -11,7 +11,7 @@ import fs, {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
 import type { Config, PluginInput } from "@opencode-ai/plugin";
@@ -563,6 +563,129 @@ for (const mutation of ["edit", "add"] as const) {
     assert.equal(toasts.length, 0);
   });
 }
+
+const editorSaves = {
+  "replaces the file": async (path: string, text: string) => {
+    const temporary = join(dirname(path), `.${basename(path)}.tmp`);
+    await writeFile(temporary, text);
+    await rename(temporary, path);
+  },
+  "deletes and recreates the file": async (path: string) => {
+    await rm(path);
+  },
+} as const;
+
+for (const [style, save] of Object.entries(editorSaves)) {
+  test(`startup reads a snippet again when an editor that ${style} saves it during capture`, async (t) => {
+    const f = await fixture(t);
+    const body = join(f.directory, "body.md");
+    await writeFile(body, "Startup");
+    const canonicalBody = await fs.realpath(body);
+    const open = fs.open;
+    let saved = false;
+    t.mock.method(fs, "open", async (...args: Parameters<typeof open>) => {
+      if (saved || args[0] !== canonicalBody) {
+        return open(...args);
+      }
+      saved = true;
+      // The save lands after the snippet was checked and before it is opened.
+      await save(body, "Saved");
+      try {
+        return await open(...args);
+      } finally {
+        await writeFile(body, "Saved");
+      }
+    });
+    syncBuiltinESMExports();
+    t.after(() => {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    });
+    const { input, toasts } = recordingToasts(f.context);
+    const hooks = await server.server(input);
+    const current = config();
+    await hooks.config!(current);
+    assert.ok(saved, "the save happened during capture");
+    assert.equal(current.agent!.review!.prompt, "Review Saved");
+    const output = skill("{{include:body.md}}");
+    await hooks["tool.execute.after"]!(skillInput, output);
+    assert.equal(output.output, skill("Saved").output);
+    const reloaded = config();
+    await (
+      await server.server(input)
+    ).config!(reloaded);
+    assert.equal(reloaded.agent!.review!.prompt, "Review Saved");
+    assert.equal(toasts.length, 0);
+  });
+}
+
+test("a snippet replaced on every read is left out with restart advice", async (t) => {
+  const f = await fixture(t);
+  const body = join(f.directory, "body.md");
+  await writeFile(body, "Startup");
+  const canonicalBody = await fs.realpath(body);
+  const open = fs.open;
+  let saves = 0;
+  t.mock.method(fs, "open", async (...args: Parameters<typeof open>) => {
+    if (args[0] === canonicalBody) {
+      await editorSaves["replaces the file"](body, `Saved ${++saves}`);
+    }
+    return open(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  const { input, toasts } = recordingToasts(f.context);
+  const hooks = await server.server(input);
+  const current = config();
+  await hooks.config!(current);
+  assert.equal(current.agent!.review!.prompt, "Review ");
+  assert.equal(toasts.length, 1);
+  const { message } = toasts[0].body;
+  assert.match(
+    message,
+    /A prompt snippet kept changing while loading\. Restart OpenCode once edits settle\./,
+  );
+  assert.match(
+    message,
+    /Prompt files could not be confirmed unchanged after 3 reads/,
+  );
+  assert.doesNotMatch(message, /Try again/);
+});
+
+test("a snippet replaced whenever its read is confirmed keeps the latest read with restart advice", async (t) => {
+  const f = await fixture(t);
+  const body = join(f.directory, "body.md");
+  await writeFile(body, "Startup");
+  const canonicalBody = await fs.realpath(body);
+  const open = fs.open;
+  let opens = 0;
+  t.mock.method(fs, "open", async (...args: Parameters<typeof open>) => {
+    // Each capture attempt opens the snippet once to read it and once to confirm it.
+    if (args[0] === canonicalBody && ++opens % 2 === 0) {
+      await editorSaves["replaces the file"](body, `Saved ${opens}`);
+    }
+    return open(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  const { input, toasts } = recordingToasts(f.context);
+  const hooks = await server.server(input);
+  const current = config();
+  await hooks.config!(current);
+  assert.equal(current.agent!.review!.prompt, "Review Saved 4");
+  assert.equal(toasts.length, 1);
+  assert.match(
+    toasts[0].body.message,
+    /^Prompt files could not be confirmed unchanged after 3 reads, so the latest reads are used\. Restart OpenCode once edits settle\. A prompt source changed while loading\. Source: /,
+  );
+  assert.doesNotMatch(toasts[0].body.message, /Try again/);
+});
 
 test("startup publishes the latest reads with a warning when snippets keep changing during capture", async (t) => {
   const f = await fixture(t);

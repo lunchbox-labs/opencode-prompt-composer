@@ -46,6 +46,8 @@ interface IncludeFrame {
   reference: string;
 }
 
+/** The snippet was replaced between being checked and opened, as an editor's save does. */
+export class SnippetChangedError extends SettingsError {}
 class IncludeError extends SettingsError {}
 class IncludeLimitError extends SettingsError {}
 
@@ -119,7 +121,7 @@ export async function readSnippet(
         current.dev !== before.dev ||
         current.size > MAX_SNIPPET_BYTES
       ) {
-        throw new SettingsError(
+        throw new SnippetChangedError(
           "A prompt snippet changed while loading. Try again.",
         );
       }

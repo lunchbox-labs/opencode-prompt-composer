@@ -8,10 +8,12 @@ import {
 import {
   type PromptDependency,
   type SkippedInclude,
+  SnippetChangedError,
   expandWithReader,
   readSnippet,
 } from "./include-core.ts";
 import { mapBounded } from "./bounded.ts";
+import { SettingsError } from "./errors.ts";
 import { errorMessage } from "./notices.ts";
 import { verifyInventory, verifyReads } from "./read-consistency.ts";
 
@@ -26,8 +28,15 @@ export interface StartupSnippets {
   warnings: readonly string[];
 }
 type Captured = { source: PromptDependency } | { error: unknown };
+interface FailedRead {
+  reference: string;
+  source: DiscoveredPrompt;
+  error: unknown;
+}
 
 const CAPTURE_ATTEMPTS = 3;
+const SNIPPET_KEPT_CHANGING =
+  "A prompt snippet kept changing while loading. Restart OpenCode once edits settle.";
 
 // Native instance disposal reruns factories but keeps the same imported module.
 const snapshots = new Map<string, Promise<StartupSnippets>>();
@@ -44,6 +53,30 @@ async function read(
   }
 }
 
+/**
+ * A read that failed because an editor was saving the file at that moment
+ * succeeds, or fails differently, when read again. Only a failure that repeats
+ * unchanged is kept in the capture.
+ */
+async function verifyFailedReads(failed: readonly FailedRead[]): Promise<void> {
+  await mapBounded(failed, async ({ reference, source, error }) => {
+    const changedWhileReading = () =>
+      new SettingsError(
+        `Prompt input changed: ${source.path}. Retry composition.`,
+      );
+    if (error instanceof SnippetChangedError) {
+      throw changedWhileReading();
+    }
+    const again = await read(reference, source);
+    if (
+      "source" in again ||
+      errorMessage(again.error) !== errorMessage(error)
+    ) {
+      throw changedWhileReading();
+    }
+  });
+}
+
 async function captureOnce(
   context: DiscoveryContext,
   environment: NodeJS.ProcessEnv,
@@ -56,19 +89,23 @@ async function captureOnce(
   );
   const captured = new Map<string, Captured>();
   const reads: PromptDependency[] = [];
-  for (const [index, [reference]] of entries.entries()) {
+  const failedReads: FailedRead[] = [];
+  for (const [index, [reference, source]] of entries.entries()) {
     const entry = loaded[index];
     captured.set(reference, entry);
     if ("source" in entry) {
       reads.push(entry.source);
+    } else {
+      failedReads.push({ reference, source, error: entry.error });
     }
   }
-  // Detect edits to early reads and discovery changes before publishing. Both
-  // checks only read, so they run together; together they hold at most twice
-  // the descriptors of either one. An edited read is still reported before a
-  // discovery change, as checking in sequence would.
+  // Detect edits to early reads, reads that failed mid-save, and discovery
+  // changes before publishing. Read checks run in sequence beside discovery,
+  // so together they hold at most twice the descriptors of either one. An
+  // edited read is still reported before a discovery change, as checking in
+  // sequence would.
   const checks = await Promise.allSettled([
-    verifyReads(reads),
+    verifyReads(reads).then(() => verifyFailedReads(failedReads)),
     verifyInventory(context, inventory, environment, () => undefined),
   ]);
   const changed: unknown = checks.find(
@@ -83,7 +120,10 @@ async function captureOnce(
           return Promise.resolve(undefined);
         }
         if ("error" in entry) {
-          throw entry.error;
+          // Hooks reuse this capture until restart, so trying again cannot help.
+          throw entry.error instanceof SnippetChangedError
+            ? new SettingsError(SNIPPET_KEPT_CHANGING)
+            : entry.error;
         }
         return Promise.resolve(entry.source);
       },
@@ -107,10 +147,9 @@ async function capture(
         continue;
       }
       // The verification advice targets library callers; here, a restart retries.
-      const reason = errorMessage(attempted.changed).replace(
-        / Retry composition\.$/,
-        "",
-      );
+      const reason = errorMessage(attempted.changed)
+        .replace(/ Retry composition\.$/, "")
+        .replace(" Try again.", "");
       warnings.push(
         `Prompt files could not be confirmed unchanged after ${CAPTURE_ATTEMPTS} reads, so the latest reads are used. Restart OpenCode once edits settle. ${reason}`,
       );
