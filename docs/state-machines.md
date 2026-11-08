@@ -1,6 +1,6 @@
 # State machines
 
-This document describes the state Prompt Composer keeps across hooks, events and reloads. Update it in the same PR as any change to these states, their triggers or their exits, following the [state machine conventions](https://github.com/lunchbox-labs/.github/blob/main/agent-guidance/state-machines.md). Known bugs belong in issues, not here.
+This document describes the state Prompt Composer keeps across hooks, events and reloads. Update it in the same PR as any change to these states, their triggers or their exits, following the [state machine conventions](https://github.com/lunchbox-labs/.github/blob/main/agent-guidance/state-machines.md), and cover each transition you add or change in `tests/`. Known bugs belong in issues, not here.
 
 OpenCode reruns the server plugin's factory on every instance load but keeps the imported module, so module-level state lasts for the process and closure state is rebuilt on each reload.
 
@@ -10,7 +10,7 @@ OpenCode reruns the server plugin's factory on every instance load but keeps the
 
 - The first factory for a key starts `capture()`.
 - A capture that resolves, with or without warnings, is kept for the rest of the process.
-- A capture that rejects, which in practice means `discoveryDirectories` failed (the ancestor limit, or an unexpected `lstat` error on a `.opencode` directory), is evicted so a later factory captures again. The factory that started it keeps its rejected promise.
+- A capture that rejects, which in practice means `discoveryDirectories` failed (the ancestor limit, or an unexpected `lstat` error on a `.opencode` directory), is evicted so a later factory captures again. Every factory that received the promise while it was pending keeps the rejection, so its config hooks keep the native prompts with an error toast until the next reload.
 
 ```mermaid
 stateDiagram-v2
@@ -25,11 +25,12 @@ stateDiagram-v2
 
 ## Capture attempts
 
-`capture()` makes up to `CAPTURE_ATTEMPTS` (3) attempts. Each one discovers files leniently, reads each file into a source or an error, then re-reads the successful reads and the inventory to confirm nothing changed. A change starts another attempt; on the last attempt the latest reads are kept with a warning to restart OpenCode once edits settle. Failed reads are kept as they are. The result is frozen inside the `expand` closure, and an error entry is thrown again each time an include uses it.
+`capture()` makes up to `CAPTURE_ATTEMPTS` (3) attempts. Each one discovers files leniently, reads each file into a source or an error, then re-reads the successful reads and the inventory to confirm nothing changed. A change, including a re-read that now fails, starts another attempt; on the last attempt the latest reads are kept with a warning to restart OpenCode once edits settle. Failed reads are kept as they are. The result is frozen inside the `expand` closure, and an error entry is thrown again each time an include uses it.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Attempt
+    Attempt --> [*]: discovery throws, capture rejects
     Attempt --> Verify
     Verify --> Attempt: reads or inventory changed, attempts left
     Verify --> Published: unchanged
@@ -54,7 +55,8 @@ stateDiagram-v2
     Fresh --> AwaitCapture: config hook
     AwaitCapture --> NativeKept: capture rejected, error toast
     AwaitCapture --> Composed: compose ok
-    Composed --> AwaitCapture: config hook again on the same object, native restored first
+    NativeKept --> AwaitCapture: later config hook, rejects again
+    Composed --> AwaitCapture: later config hook, native restored first on the same object
     Composed --> Composed: skill output expanded or kept with a toast
 ```
 
@@ -62,7 +64,7 @@ stateDiagram-v2
 
 These have no state that outlives one call:
 
-- Composition (`src/runtime.ts`) gives each agent or command one outcome: composed, composed with warnings, native kept (an empty result with problems, or `expand` threw, for example at the size limit), or skipped (disabled, blank or not a string).
+- Composition (`src/runtime.ts`) gives each agent or command one outcome: composed, composed with warnings, native kept (an empty result with problems, or `expand` threw, for example at the size limit), or skipped (an agent that is disabled or whose prompt is blank or not a string, or a command whose template is not a string).
 - Include expansion (`src/include-core.ts`) tracks an include count, `limitReported` and the recursion stack for cycle checks. An escaped marker is written literally, a malformed one is left as written with a warning, a failing one expands to nothing with a warning, and exceeding `promptSize` throws an `IncludeError` that the caller turns into a fallback.
 - The skill output gate (`src/skill-body.ts`) is a chain of checks. Every exit except a successful expansion returns the native output, with a toast unless nothing needed doing.
 - Discovery (`src/discovery.ts`) counts entries and, in lenient mode, leaves out entries that fail with `leaveOut`. `EntryLimitError` stops the walk and becomes one warning.
@@ -79,7 +81,7 @@ These have no state that outlives one call:
 ```mermaid
 stateDiagram-v2
     [*] --> Closed
-    Closed --> Showing: show root
+    Closed --> Showing: show
     Showing --> Showing: show child, refresh, back with a parent
     Showing --> Restoring: host closes the dialog
     Restoring --> Showing: context unchanged and a parent exists
@@ -97,6 +99,7 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> Idle
     Idle --> Loading: /view-prompts
+    Loading --> Loading: /view-prompts again
     Loading --> Idle: checkpoint stale
     Loading --> RetryMenu: request error or throw
     Loading --> RootMenu: ok
@@ -107,6 +110,6 @@ stateDiagram-v2
 
 ## Persisted and lifecycle state
 
-- The `prompt-composer.showBuiltins` kv value is read once per open; toggling it writes kv and refreshes. Before kv is ready it reads as false.
-- The fixed menu and text viewer renderables go from created to focused on a 1 ms timer, and clear their timer, resize listener, keymap layer and abort listener when destroyed by the host or a lifecycle abort.
+- The `prompt-composer.showBuiltins` kv value is read once per open; toggling it writes kv and refreshes. A missing kv store reads as false.
+- The fixed menu and text viewer renderables go from created to focused on a 1 ms timer and are destroyed by the host or a lifecycle abort. The fixed menu then clears its focus timer and abort listener; the text viewer also removes its resize listener and keymap layer.
 - The TUI plugin registers the `/view-prompts` command and a `server.instance.disposed` watcher that closes an open viewer for the same directory, and unregisters both on dispose.
