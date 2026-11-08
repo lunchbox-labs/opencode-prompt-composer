@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { type TestContext, test } from "node:test";
-import type { Config, PluginInput } from "@opencode-ai/plugin";
+import type { Config, Hooks, PluginInput } from "@opencode-ai/plugin";
 import { discoverPrompts } from "../src/discovery.ts";
 import { expandWithReader } from "../src/include-core.ts";
 import { expandIncludes } from "../src/includes.ts";
@@ -449,6 +449,114 @@ test("toast failures cannot prevent unknown skill output from passing through", 
     );
     assert.deepEqual(output, before);
   }
+});
+
+type CommandParts = Parameters<
+  NonNullable<Hooks["command.execute.before"]>
+>[1]["parts"];
+
+function commandParts(text: string): CommandParts {
+  return [{ id: "p", sessionID: "s", messageID: "m", type: "text", text }];
+}
+
+function withCommands(
+  input: PluginInput,
+  list: () => Promise<{ data?: unknown }>,
+): PluginInput {
+  const client = input.client as unknown as Record<string, unknown>;
+  return {
+    ...input,
+    client: { ...client, command: { list } },
+  } as unknown as PluginInput;
+}
+
+test("a skill run as a slash command with include markers warns once and is sent unchanged", async (t) => {
+  const { context } = await fixture(t);
+  const recorded = recordingToasts(context);
+  const listed = [
+    { name: "evidence", source: "skill", template: "" },
+    { name: "delegated", source: "skill", template: "" },
+    { name: "check", source: "command", template: "" },
+  ];
+  const hooks = await server.server(
+    withCommands(recorded.input, () => Promise.resolve({ data: listed })),
+  );
+  const run = async (command: string, parts: CommandParts) => {
+    const output = { parts };
+    const before = structuredClone(output);
+    await hooks["command.execute.before"]!(
+      { command, sessionID: "s", arguments: "" },
+      output,
+    );
+    assert.deepEqual(output, before, "the command is sent as written");
+  };
+  const skillBody =
+    "Skill {{include:review.md}}\n\nBase directory for this skill: /skills/evidence";
+  await run("evidence", commandParts(skillBody));
+  assert.equal(recorded.toasts.length, 1);
+  assert.equal(recorded.toasts[0].body.variant, "warning");
+  assert.equal(
+    recorded.toasts[0].body.message,
+    'Skill "evidence" ran as a slash command, which does not expand includes; its markers were sent as written. Ask the agent to load the skill instead.',
+  );
+  await run("evidence", commandParts(skillBody));
+  assert.equal(recorded.toasts.length, 1, "each skill warns once");
+  await run("delegated", [
+    {
+      id: "p",
+      sessionID: "s",
+      messageID: "m",
+      type: "subtask",
+      prompt: "Delegated {{include?:review.md}}",
+      description: "",
+      agent: "helper",
+    },
+  ]);
+  assert.equal(recorded.toasts.length, 2, "subagent skill commands warn too");
+  assert.match(recorded.toasts[1].body.message, /^Skill "delegated" ran/);
+  // Configured commands were composed at config time; an escaped marker
+  // composes to a literal one.
+  await run("check", commandParts("Check {{include:literal.md}}"));
+  await run("unlisted", commandParts("{{include:review.md}}"));
+  assert.equal(recorded.toasts.length, 2);
+});
+
+test("skill commands without markers, and failed command lookups, never warn or fail the command", async (t) => {
+  const { context } = await fixture(t);
+  const recorded = recordingToasts(context);
+  let lookups = 0;
+  const quiet = await server.server(
+    withCommands(recorded.input, () => {
+      lookups++;
+      return Promise.resolve({
+        data: [{ name: "evidence", source: "skill", template: "" }],
+      });
+    }),
+  );
+  await quiet["command.execute.before"]!(
+    { command: "evidence", sessionID: "s", arguments: "" },
+    { parts: commandParts("Plain skill body") },
+  );
+  assert.equal(lookups, 0, "commands without markers are not looked up");
+  for (const list of [
+    () => Promise.reject(new Error("unavailable")),
+    () => {
+      throw new Error("unavailable");
+    },
+    () => Promise.resolve({ data: undefined }),
+  ]) {
+    const hooks = await server.server(withCommands(recorded.input, list));
+    await hooks["command.execute.before"]!(
+      { command: "evidence", sessionID: "s", arguments: "" },
+      { parts: commandParts("{{include:review.md}}") },
+    );
+  }
+  const headless = await server.server(context as PluginInput);
+  await headless["command.execute.before"]!(
+    { command: "evidence", sessionID: "s", arguments: "" },
+    { parts: commandParts("{{include:review.md}}") },
+  );
+  assert.equal(recorded.toasts.length, 0);
 });
 
 test("config include failures show one warning toast naming every incomplete consumer", async (t) => {

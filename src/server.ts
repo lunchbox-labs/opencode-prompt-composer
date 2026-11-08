@@ -1,5 +1,12 @@
-import type { Config, Hooks, Plugin, PluginModule } from "@opencode-ai/plugin";
+import type {
+  Config,
+  Hooks,
+  Plugin,
+  PluginInput,
+  PluginModule,
+} from "@opencode-ai/plugin";
 import { diagnosticName } from "./errors.ts";
+import { hasIncludeMarker } from "./include-core.ts";
 import {
   type NoticeVariant,
   errorMessage,
@@ -55,6 +62,44 @@ function warningsNotice(warnings: readonly string[]): Notice {
   };
 }
 
+type CommandPart = Parameters<
+  NonNullable<Hooks["command.execute.before"]>
+>[1]["parts"][number];
+
+function partText(part: CommandPart): string | undefined {
+  if (part.type === "text") {
+    return part.text;
+  }
+  return part.type === "subtask" ? part.prompt : undefined;
+}
+
+// The host composes generated skill commands from cached skill content after
+// substituting arguments and shell output, so their includes cannot be
+// expanded (#102). The command list's `source` field, absent from the V1
+// client types, tells them apart from configured commands, which were
+// composed at config time.
+async function isSkillCommand(
+  input: PluginInput,
+  command: string,
+): Promise<boolean> {
+  const listed = await input.client.command.list({
+    query: { directory: input.directory },
+  });
+  const commands: unknown = listed.data;
+  return (
+    Array.isArray(commands) &&
+    commands.some(
+      (entry: unknown) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        "name" in entry &&
+        entry.name === command &&
+        "source" in entry &&
+        entry.source === "skill",
+    )
+  );
+}
+
 const PromptComposer: Plugin = (input, options = {}) => {
   const ignoredOptions = Object.keys(options).map(diagnosticName);
   let firstConfig = true;
@@ -64,6 +109,7 @@ const PromptComposer: Plugin = (input, options = {}) => {
   };
   const startup = startupSnippets(context);
   const snapshots = new WeakMap<object, { native: Bodies; applied: Bodies }>();
+  const warnedSkillCommands = new Set<string>();
   return Promise.resolve({
     config: async (config) => {
       const native = structuredClone(config);
@@ -142,6 +188,27 @@ const PromptComposer: Plugin = (input, options = {}) => {
         native: bodies(native),
         applied: bodies(composed),
       });
+    },
+    "command.execute.before": async (call, output) => {
+      try {
+        if (
+          warnedSkillCommands.has(call.command) ||
+          !output.parts.some((part) => {
+            const text = partText(part);
+            return text !== undefined && hasIncludeMarker(text);
+          }) ||
+          !(await isSkillCommand(input, call.command))
+        ) {
+          return;
+        }
+        warnedSkillCommands.add(call.command);
+        notify(
+          input,
+          `Skill ${diagnosticName(call.command)} ran as a slash command, which does not expand includes; its markers were sent as written. Ask the agent to load the skill instead.`,
+        );
+      } catch {
+        // A throwing hook fails the command; the warning is best-effort.
+      }
     },
     "tool.execute.after": async (call, output) => {
       if (call.tool !== "skill") {

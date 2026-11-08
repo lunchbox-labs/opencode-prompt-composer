@@ -479,6 +479,64 @@ test(
       );
       return response.json();
     }
+    interface Toast {
+      title?: string;
+      message: string;
+      variant: string;
+    }
+    // Toasts reach a TUI as instance events; collect them the same way.
+    async function watchToasts() {
+      const toasts: Toast[] = [];
+      const stop = new AbortController();
+      t.after(() => stop.abort());
+      const response = await fetch(`${url}/event`, {
+        headers: { "x-opencode-directory": project },
+        signal: AbortSignal.any([t.signal, stop.signal]),
+      });
+      assert.ok(response.ok && response.body !== null, logs);
+      const reading = (async () => {
+        let buffered = "";
+        for await (const chunk of response.body!.pipeThrough(
+          new TextDecoderStream(),
+        )) {
+          buffered += chunk;
+          const lines = buffered.split("\n");
+          buffered = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) {
+              continue;
+            }
+            const event = JSON.parse(line.slice(6)) as {
+              type: string;
+              properties: Toast;
+            };
+            if (event.type === "tui.toast.show") {
+              const { title, message, variant } = event.properties;
+              toasts.push({ title, message, variant });
+            }
+          }
+        }
+      })().catch(() => undefined);
+      return {
+        async until(matches: (toast: Toast) => boolean): Promise<Toast> {
+          try {
+            for (let attempt = 0; attempt < 200; attempt++) {
+              const found = toasts.find(matches);
+              if (found !== undefined) {
+                return found;
+              }
+              await setTimeout(50);
+            }
+            throw new Error(
+              `Expected toast was not shown: ${JSON.stringify(toasts)}\n${logs}`,
+            );
+          } finally {
+            stop.abort();
+            await reading;
+          }
+        },
+      };
+    }
     // The pinned host caches ripgrep initialization globally. Disposing its first
     // instance during a cold download caches an interrupted fiber on Windows.
     // Finish that real dependency before testing instance reloads.
@@ -632,6 +690,7 @@ test(
 
     const slashSession = (await api("/session", {})) as { id: string };
     const beforeSlash = received.length;
+    const slashToasts = await watchToasts();
     const slashMessage = await api(`/session/${slashSession.id}/command`, {
       command: "evidence",
       arguments: "",
@@ -639,6 +698,15 @@ test(
       model: "fixture/model",
     });
     assert.match(JSON.stringify(slashMessage), /Verified/);
+    assert.deepEqual(
+      await slashToasts.until((toast) => toast.message.includes("evidence")),
+      {
+        title: "Prompt Composer",
+        message:
+          'Skill "evidence" ran as a slash command, which does not expand includes; its markers were sent as written. Ask the agent to load the skill instead.',
+        variant: "warning",
+      },
+    );
     const slashMessages = received.slice(beforeSlash).flatMap(
       (body) =>
         (
