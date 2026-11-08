@@ -29,7 +29,7 @@ stateDiagram-v2
 
 - Successful reads are re-read; one that now differs or fails is a change.
 - Failed reads are then read again, as when an editor was saving the file mid-read. A read that failed because the file was replaced between being checked and opened is always a change; any other failed read is a change when it now succeeds or fails with a different message. A failure that repeats unchanged, such as an invalid or unreadable file, is kept.
-- The inventory is discovered again; a different set of names or paths is a change.
+- The inventory is discovered again; a different set of discovered directories, names or paths is a change.
 
 A change starts another attempt. On the last attempt the latest reads are kept with a warning to restart OpenCode once edits settle. The result is frozen inside the `expand` closure, and an error entry is thrown again each time an include uses it; an entry for a file that was still being replaced says to restart OpenCode once edits settle, since every later hook reuses the capture.
 
