@@ -30,7 +30,7 @@ Review the supplied changes.
 Distinguish observed behavior from assumptions.
 ```
 
-Use `{{include?:personal/review.md}}` for an include that may be absent, and run `/view-prompts` to read the loaded agent and command text. Restart the OpenCode server after editing snippets. A problem with an include leaves it out with a warning toast; it never stops a prompt from loading.
+Use `{{include?:personal/review.md}}` for an include that may be absent, and run `/view-prompts` to read the loaded agent and command text. Restart the OpenCode server after editing snippets. A problem with an include shows a warning toast and never stops a prompt from loading; [Usage](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Usage#snippet-lifetime) describes what is kept.
 
 ## Documentation
 
@@ -40,4 +40,5 @@ The [wiki](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki) has t
 - [Discovery](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Discovery): prompt directories, precedence and limits.
 - [Migration](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Migration): older Prompt Composer settings and Config Composer ordering.
 - [Review guidance](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Review-guidance) and [On-demand verification](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/On-demand-verification): walkthroughs of the runnable projects in [docs/examples](docs/examples/).
+- [Downloads](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Downloads): published package versions.
 - [Developer](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Developer): development, compatibility testing and publishing.

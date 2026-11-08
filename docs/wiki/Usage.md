@@ -28,7 +28,7 @@ Use `{{include?:personal/review.md}}` for optional guidance. If no discovered `p
 
 Keep all guidance in native bodies and snippet files. There is no Prompt Composer settings file, and plugin options are ignored with a warning. Agent metadata and command placeholders such as `$ARGUMENTS` and `$1` remain native. Disabled agents and agents with no nonblank authored prompt keep their existing text or native fallback.
 
-Skill bodies expand when the native `skill` tool returns them. Automatically generated skill slash commands do not pass through that hook and do not expand includes. Skill discovery and permissions remain OpenCode's responsibility.
+Skill bodies expand when the native `skill` tool returns them. Automatically generated skill slash commands do not pass through that hook and do not expand includes; running one that contains include markers shows a warning once per skill. Skill discovery and permissions remain OpenCode's responsibility.
 
 ## Snippet lifetime
 
