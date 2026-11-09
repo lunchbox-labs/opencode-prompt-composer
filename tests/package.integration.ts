@@ -49,10 +49,12 @@ test(
 
     for (const path of [
       "README.md",
+      "docs/examples/review/README.md",
       "docs/examples/review/.opencode/agents/review.md",
       "docs/examples/review/.opencode/commands/check.md",
       "docs/examples/review/.opencode/prompts/review/context.md",
       "docs/examples/review/.opencode/prompts/review/findings.md",
+      "docs/examples/skill-guidance/README.md",
       "docs/examples/skill-guidance/.opencode/skills/verification/SKILL.md",
       "docs/examples/skill-guidance/.opencode/prompts/verification.md",
     ]) {
