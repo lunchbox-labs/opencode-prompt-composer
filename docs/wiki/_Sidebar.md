@@ -5,13 +5,8 @@
 - [Usage](Usage)
 - [Discovery](Discovery)
 - [Migration](Migration)
-- [Review guidance](Review-guidance)
-- [On-demand verification](On-demand-verification)
-- [Downloads](Downloads)
 
 **Developer**
 
-- [Developer overview](Developer)
-- [Development and testing](Development)
+- [Developer](Developer)
 - [Publishing](Publishing)
-- [Extraction provenance](Extraction-provenance)

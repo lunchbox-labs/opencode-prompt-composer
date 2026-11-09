@@ -39,6 +39,6 @@ The [wiki](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki) has t
 - [Usage](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Usage): includes, optional includes, the prompt viewer and native file references.
 - [Discovery](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Discovery): prompt directories, precedence and limits.
 - [Migration](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Migration): older Prompt Composer settings and Config Composer ordering.
-- [Review guidance](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Review-guidance) and [On-demand verification](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/On-demand-verification): walkthroughs of the runnable projects in [docs/examples](docs/examples/).
-- [Downloads](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Downloads): published package versions.
 - [Developer](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Developer): development, compatibility testing and publishing.
+
+[Review guidance](docs/examples/review/) and [On-demand verification](docs/examples/skill-guidance/) are runnable example projects, each with a walkthrough. Published versions are listed on [npm](https://www.npmjs.com/package/@lunchbox-labs/opencode-prompt-composer?activeTab=versions).

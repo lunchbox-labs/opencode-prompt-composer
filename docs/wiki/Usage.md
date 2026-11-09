@@ -50,6 +50,6 @@ Includes also work inside Markdown agent, command and skill bodies. They expand 
 
 ## Examples
 
-- [Review guidance](Review-guidance) shares a findings format between an agent and command.
-- [On-demand verification](On-demand-verification) loads a checklist through a skill.
+- [Review guidance](https://github.com/lunchbox-labs/opencode-prompt-composer/tree/main/docs/examples/review) shares a findings format between an agent and command.
+- [On-demand verification](https://github.com/lunchbox-labs/opencode-prompt-composer/tree/main/docs/examples/skill-guidance) loads a checklist through a skill.
 - [Migration](Migration) covers older Prompt Composer settings and optional Config Composer ordering.

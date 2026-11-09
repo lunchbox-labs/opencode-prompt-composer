@@ -14,6 +14,6 @@ Use `/view-prompts` to inspect loaded agent prompts and command templates. Edit 
 
 The packages are independent. Config Composer owns configuration composition; Prompt Composer owns prompt includes. When using both, register Config Composer first so Prompt Composer receives the resulting agent availability. Avoid older Config Composer releases that also expand prompts, which can expand escaped markers twice.
 
-Compatibility testing uses an explicit Config Composer baseline; it does not establish compatibility with every Config Composer revision. See [Development](Development#host-compatibility) for the test policy. Configuration migration belongs in [Config Composer's documentation](https://github.com/lunchbox-labs/opencode-config-composer/wiki).
+Compatibility testing uses an explicit Config Composer baseline; it does not establish compatibility with every Config Composer revision. See [Developer](Developer#host-compatibility) for the test policy. Configuration migration belongs in [Config Composer's documentation](https://github.com/lunchbox-labs/opencode-config-composer/wiki).
 
 Agents without a nonblank authored prompt retain native fallback. To compose guidance into such an agent, author its native prompt intentionally and place includes there.
