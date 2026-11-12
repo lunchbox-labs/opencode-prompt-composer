@@ -35,7 +35,13 @@ const manifestOf = async (workspace: string) =>
     version: string;
     devDependencies: Record<string, string>;
   };
-const { devDependencies } = await manifestOf(".");
+// The packed install has no lockfile, so it takes the locked @types/node
+// version rather than the root manifest's range.
+const nodeTypes = (
+  JSON.parse(
+    await readFile(new URL("../package-lock.json", import.meta.url), "utf8"),
+  ) as { packages: Record<string, { version: string }> }
+).packages["node_modules/@types/node"].version;
 
 /** Every file under a directory, as paths relative to it. */
 async function filesUnder(directory: string): Promise<string[]> {
@@ -153,7 +159,7 @@ for (const host of Object.values(hosts)) {
           "--no-fund",
           join(root, filename),
           `${host.pluginPackage}@${pluginVersion}`,
-          `@types/node@${devDependencies["@types/node"]}`,
+          `@types/node@${nodeTypes}`,
         ],
         { timeout: 120_000, signal: t.signal },
       );

@@ -65,6 +65,8 @@ Tests should protect observable behavior, safety boundaries and host contracts. 
 
 The authoritative ranges and floors live in [tests/opencode.json](https://github.com/lunchbox-labs/opencode-prompt-composer/blob/main/tests/opencode.json) and [tests/kilo.json](https://github.com/lunchbox-labs/opencode-prompt-composer/blob/main/tests/kilo.json); they are separate from pinned SDK/build dependencies and are not shipped in the packages. No host runtime engine restriction is declared.
 
+Each package's plugin and SDK dev dependencies (`@opencode-ai/*` 1.19.5 or `@kilocode/*` 7.8.27), and its `@opentui/*` and `solid-js` dev dependencies, stay on exact versions that match what its host bundles; the baseline tests enforce them. Other dependencies use version ranges, and `package-lock.json` decides what CI installs. Shared tooling at the root uses `^`, except TypeScript and Prettier, which use `~` because their minor releases change type checking and formatting. The npm version in the Release workflow's publish job also stays exact.
+
 | Host | CLI package | Version lane variable |
 | --- | --- | --- |
 | OpenCode | `opencode-ai` | `OPENCODE_TEST_VERSION` |
