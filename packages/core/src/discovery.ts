@@ -110,6 +110,24 @@ export function hostHome(
   return host.trimsHome ? home.trim() : home;
 }
 
+/**
+ * The directory holding the host's global config directory: an absolute
+ * XDG_CONFIG_HOME, after line breaks are removed when the host profile says
+ * so, or else ~/.config.
+ */
+export function configHome(
+  host: Host,
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  const value = environment.XDG_CONFIG_HOME;
+  const xdg = host.stripsConfigHomeLineBreaks
+    ? value?.replace(/[\r\n]+/g, "")
+    : value;
+  return xdg !== undefined && isAbsolute(xdg)
+    ? xdg
+    : join(homedir(), ".config");
+}
+
 /** Mirrors the host's ConfigPaths.directories; environment is injectable for isolated tests. */
 export async function discoveryDirectories(
   context: DiscoveryContext,
@@ -117,12 +135,7 @@ export async function discoveryDirectories(
   pathExists: (path: string) => Promise<boolean> = exists,
 ): Promise<string[]> {
   const { host } = context;
-  // A line break pasted into the variable never names a real directory.
-  const xdg = environment.XDG_CONFIG_HOME?.replace(/[\r\n]+/g, "");
-  const global = join(
-    xdg !== undefined && isAbsolute(xdg) ? xdg : join(homedir(), ".config"),
-    host.globalDirectory,
-  );
+  const global = join(configHome(host, environment), host.globalDirectory);
   const ancestors: string[] = [];
   let limited = false;
   if (projectDiscoveryEnabled(host, environment)) {

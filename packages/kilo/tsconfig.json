@@ -2,7 +2,11 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "paths": {
-      "@lunchbox-labs/prompt-composer-core/*": ["../core/src/*.ts"]
+      "@lunchbox-labs/prompt-composer-core/*": ["../core/src/*.ts"],
+      "@opentui/*": ["./node_modules/@opentui/*"],
+      "@opentui/keymap/extras": [
+        "./node_modules/@opentui/keymap/src/extras/index.d.ts"
+      ]
     }
   },
   "include": ["src/**/*.ts"]

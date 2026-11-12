@@ -127,6 +127,30 @@ jobs:
           RELEASE_PRERELEASE: ${{ inputs.prerelease }}
           RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: node scripts/validate-release.mjs
+      # npm adds a trusted publisher only to a package that exists, so a
+      # package name that was never published would fail Publish npm after
+      # the packages before it had been published.
+      - name: Require every package to exist on npm
+        env:
+          NPM_PACKAGES: ${{ steps.release.outputs.packages }}
+        run: |
+          missing=""
+          for package in $NPM_PACKAGES; do
+            if ! npm view "$package" name > /dev/null 2>"$RUNNER_TEMP/npm-name.log"; then
+              if grep -q "code E404" "$RUNNER_TEMP/npm-name.log"; then
+                missing="$missing $package"
+              else
+                cat "$RUNNER_TEMP/npm-name.log" >&2
+                exit 1
+              fi
+            fi
+          done
+          if [ -n "$missing" ]; then
+            for package in $missing; do
+              echo "::error::$package is not on npm. Publish a bootstrap pre-release of it and add its trusted publisher, as the Publishing wiki page describes, then run Release again."
+            done
+            exit 1
+          fi
       - name: Refuse a version that is already released
         env:
           NPM_PACKAGES: ${{ steps.release.outputs.packages }}
@@ -190,7 +214,7 @@ jobs:
     needs: [verify, check]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     environment: release
     permissions:
       contents: read

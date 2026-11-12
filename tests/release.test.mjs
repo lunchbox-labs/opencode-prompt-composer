@@ -366,7 +366,13 @@ test("a manual run on main verifies the packages' version, runs Check, publishes
   const refuse = verify.steps.findIndex(
     (step) => step.name === "Refuse a version that is already released",
   );
-  assert.ok(validateStep >= 0 && refuse > validateStep);
+  const exists = verify.steps.findIndex(
+    (step) => step.name === "Require every package to exist on npm",
+  );
+  assert.ok(validateStep >= 0 && exists > validateStep && refuse > exists);
+  assert.deepEqual(verify.steps[exists].env, {
+    NPM_PACKAGES: "${{ steps.release.outputs.packages }}",
+  });
   assert.deepEqual(verify.steps[validateStep].env, {
     RELEASE_PRERELEASE: "${{ inputs.prerelease }}",
     RELEASE_TAG: "${{ needs.version.outputs.tag }}",
@@ -988,6 +994,43 @@ test("the run summary links the release", linuxOnly, async () => {
   assert.equal(bare.code, 0, bare.stderr);
   assert.match(bare.summary, /without every package/);
 });
+
+test(
+  "a run stops before building when any package name was never published",
+  linuxOnly,
+  async () => {
+    const run = (view) =>
+      runStep(
+        "verify",
+        { npm: `if [ "$1" = view ]; then ${view}; fi` },
+        { NPM_PACKAGES: examplePackages.join(" ") },
+        "Require every package to exist on npm",
+      );
+    const present = await run(`echo "$2"`);
+    assert.equal(present.code, 0, present.stderr);
+    assert.deepEqual(
+      present.calls,
+      examplePackages.map((name) => `npm view ${name} name`),
+    );
+    // Every missing name is reported, not only the first.
+    const missing = await run(
+      `if [ "$2" != "@lunchbox-labs/example-core" ]; then echo "npm error code E404" >&2; exit 1; fi; echo "$2"`,
+    );
+    assert.equal(missing.code, 1);
+    assert.equal(missing.calls.length, examplePackages.length);
+    for (const name of examplePackages.slice(1)) {
+      assert.match(
+        missing.stdout,
+        new RegExp(`::error::${name.replaceAll("/", "\\/")} is not on npm`),
+      );
+    }
+    assert.doesNotMatch(missing.stdout, /example-core is not on npm/);
+    const offline = await run(`echo "npm error code ECONNRESET" >&2; exit 1`);
+    assert.equal(offline.code, 1);
+    assert.match(offline.stderr, /ECONNRESET/);
+    assert.equal(offline.calls.length, 1);
+  },
+);
 
 test(
   "a run refuses a version that already has a tag or an npm release",

@@ -1,8 +1,8 @@
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   type DiscoveredPrompt,
   type DiscoveryContext,
+  configHome,
   discoverPrompts,
   hostHome,
 } from "./discovery.ts";
@@ -169,20 +169,15 @@ export function startupSnippets(
     worktree: resolve(context.worktree),
     host,
   };
-  const key = JSON.stringify([
-    host.name,
-    normalized.directory,
-    normalized.worktree,
-  ]);
+  // The whole profile, so two profiles that read different directories never
+  // share a capture.
+  const key = JSON.stringify([host, normalized.directory, normalized.worktree]);
   const previous = snapshots.get(key);
   if (previous !== undefined) {
     return previous;
   }
-  const home = homedir();
   const environment = { ...process.env };
-  const xdg = environment.XDG_CONFIG_HOME;
-  environment.XDG_CONFIG_HOME =
-    xdg !== undefined && isAbsolute(xdg) ? xdg : join(home, ".config");
+  environment.XDG_CONFIG_HOME = configHome(host, environment);
   environment[host.env.testHome] = resolve(hostHome(host, environment));
   const custom = environment[host.env.configDirectory];
   if (custom !== undefined && custom !== "") {

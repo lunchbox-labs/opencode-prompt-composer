@@ -133,14 +133,66 @@ test("OpenCode discovery ignores Kilo roots and environment overrides", async (t
   assert.equal(result.files.size, 0);
 });
 
-test("both hosts ignore line breaks in XDG_CONFIG_HOME", async (t) => {
+test("only Kilo ignores line breaks in XDG_CONFIG_HOME", async (t) => {
   const f = await fixture(t);
-  for (const host of [kilo, opencode]) {
-    const [global] = await discoveryDirectories(
-      { ...f.context, host },
-      { ...f.env, XDG_CONFIG_HOME: `${join(f.root, "config")}\r\n` },
+  const config = join(f.root, "config");
+  const [kiloGlobal] = await discoveryDirectories(f.context, {
+    ...f.env,
+    XDG_CONFIG_HOME: `\r\n${config}\r\n`,
+  });
+  assert.equal(kiloGlobal, join(config, "kilo"));
+  // OpenCode 1.19 uses the value as given.
+  const [opencodeGlobal] = await discoveryDirectories(
+    { ...f.context, host: opencode },
+    { ...f.env, XDG_CONFIG_HOME: `${config}\n` },
+  );
+  assert.equal(opencodeGlobal, join(`${config}\n`, "opencode"));
+});
+
+test("startup capture strips XDG_CONFIG_HOME line breaks before the absolute-path check only for Kilo", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "prompt-kilo-xdg-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const config = join(root, "config");
+  for (const directory of ["kilo", "opencode"]) {
+    await mkdir(join(config, directory, "prompts"), { recursive: true });
+    await writeFile(
+      join(config, directory, "prompts/body.md"),
+      `Global ${directory}`,
     );
-    assert.equal(global, join(f.root, "config", host.globalDirectory));
+  }
+  const previous = process.env.XDG_CONFIG_HOME;
+  // A leading line break makes the raw value relative.
+  process.env.XDG_CONFIG_HOME = `\n${config}`;
+  try {
+    for (const [host, expected] of [
+      [kilo, "Review Global kilo"],
+      [opencode, "Review {{include:body.md}}"],
+    ] as const) {
+      const project = join(root, `project-${host.globalDirectory}`);
+      await mkdir(project, { recursive: true });
+      const { input } = recordingToasts({
+        directory: project,
+        worktree: project,
+      });
+      const hooks = await createServer(host).server(input);
+      const current: Config = {
+        agent: { review: { prompt: "Review {{include:body.md}}" } },
+      };
+      await hooks.config!(current);
+      const prompt = current.agent!.review!.prompt;
+      if (host === kilo) {
+        assert.equal(prompt, expected);
+      } else {
+        // The raw value is not absolute, so OpenCode falls back to ~/.config.
+        assert.notEqual(prompt, "Review Global opencode");
+      }
+    }
+  } finally {
+    if (previous === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = previous;
+    }
   }
 });
 
@@ -336,5 +388,27 @@ test("built-in framing is accepted only for Kilo's native builtin metadata", asy
     );
     assert.equal(notices.length, 1);
     assert.match(notices[0], /unknown or incomplete framing/);
+  }
+});
+
+test("startup captures are not shared between profiles that read different directories", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "prompt-kilo-profile-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const directory of [".kilo", ".custom"]) {
+    await mkdir(join(root, directory, "prompts"), { recursive: true });
+    await writeFile(join(root, directory, "prompts/body.md"), directory);
+  }
+  const custom = { ...kilo, projectDirectories: [".custom"] };
+  for (const [host, expected] of [
+    [kilo, "Review .kilo"],
+    [custom, "Review .custom"],
+  ] as const) {
+    const { input } = recordingToasts({ directory: root, worktree: root });
+    const hooks = await createServer(host).server(input);
+    const current: Config = {
+      agent: { review: { prompt: "Review {{include:body.md}}" } },
+    };
+    await hooks.config!(current);
+    assert.equal(current.agent!.review!.prompt, expected);
   }
 });

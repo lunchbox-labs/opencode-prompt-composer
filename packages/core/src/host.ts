@@ -23,6 +23,8 @@ export interface Host {
   };
   /** Whether the host trims surrounding whitespace from its home directory. */
   readonly trimsHome: boolean;
+  /** Whether line breaks are removed from XDG_CONFIG_HOME before it is used. */
+  readonly stripsConfigHomeLineBreaks: boolean;
   /**
    * The skill metadata `dir` of the host's built-in skills, which it frames
    * without a base directory or file list, if it has any.
@@ -42,6 +44,8 @@ export const opencode: Host = Object.freeze({
     testHome: "OPENCODE_TEST_HOME",
   }),
   trimsHome: false,
+  // OpenCode 1.19 uses XDG_CONFIG_HOME as given.
+  stripsConfigHomeLineBreaks: false,
 });
 
 /** Mirrors Kilo CLI 7.8.27. */
@@ -56,5 +60,8 @@ export const kilo: Host = Object.freeze({
     testHome: "KILO_TEST_HOME",
   }),
   trimsHome: true,
+  // Kept from the Kilo port: a line break pasted into the variable never
+  // names a real directory. Kilo 7.8.27 itself uses the value as given.
+  stripsConfigHomeLineBreaks: true,
   builtinSkillDirectory: "builtin",
 });

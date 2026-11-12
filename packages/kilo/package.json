@@ -39,7 +39,7 @@
   "scripts": {
     "prebuild": "node --input-type=module -e \"import { rm } from 'node:fs/promises'; await rm('dist', { recursive: true, force: true });\"",
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.core.json",
     "prepack": "npm run build"
   },
   "dependencies": {
