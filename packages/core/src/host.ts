@@ -48,7 +48,10 @@ export const opencode: Host = Object.freeze({
   stripsConfigHomeLineBreaks: false,
 });
 
-/** Mirrors Kilo CLI 7.8.27. */
+/**
+ * Mirrors Kilo CLI 7.8.27, with one deliberate exception kept from the Kilo
+ * port: line breaks are removed from XDG_CONFIG_HOME.
+ */
 export const kilo: Host = Object.freeze({
   name: "Kilo",
   globalDirectory: "kilo",
@@ -60,8 +63,8 @@ export const kilo: Host = Object.freeze({
     testHome: "KILO_TEST_HOME",
   }),
   trimsHome: true,
-  // Kept from the Kilo port: a line break pasted into the variable never
-  // names a real directory. Kilo 7.8.27 itself uses the value as given.
+  // The exception: Kilo 7.8.27 itself uses the value as given, but a line
+  // break pasted into the variable never names a real directory.
   stripsConfigHomeLineBreaks: true,
   builtinSkillDirectory: "builtin",
 });

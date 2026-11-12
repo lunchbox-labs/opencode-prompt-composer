@@ -45,6 +45,43 @@ async function fixture(t: TestContext) {
   return { root, home, global, project, nested, custom, roots, env, context };
 }
 
+/** Runs fn with the given environment variables set, or unset when undefined. */
+async function withEnvironment(
+  values: Record<string, string | undefined>,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const previous = Object.fromEntries(
+    Object.keys(values).map((name) => [name, process.env[name]]),
+  );
+  const apply = (entries: Record<string, string | undefined>) => {
+    for (const [name, value] of Object.entries(entries)) {
+      if (value === undefined) {
+        Reflect.deleteProperty(process.env, name);
+      } else {
+        process.env[name] = value;
+      }
+    }
+  };
+  apply(values);
+  try {
+    await fn();
+  } finally {
+    apply(previous);
+  }
+}
+
+/** Environment that keeps both hosts away from the real home directory. */
+function isolatedHome(home: string): Record<string, string | undefined> {
+  return {
+    HOME: home,
+    USERPROFILE: home,
+    KILO_TEST_HOME: home,
+    OPENCODE_TEST_HOME: home,
+    KILO_CONFIG_DIR: undefined,
+    OPENCODE_CONFIG_DIR: undefined,
+  };
+}
+
 test("Kilo discovery mirrors the host's root order and later relative-path overrides", async (t) => {
   const f = await fixture(t);
   for (const directory of f.roots.toReversed()) {
@@ -153,6 +190,8 @@ test("startup capture strips XDG_CONFIG_HOME line breaks before the absolute-pat
   const root = await mkdtemp(join(tmpdir(), "prompt-kilo-xdg-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const config = join(root, "config");
+  const home = join(root, "home");
+  await mkdir(home);
   for (const directory of ["kilo", "opencode"]) {
     await mkdir(join(config, directory, "prompts"), { recursive: true });
     await writeFile(
@@ -160,40 +199,31 @@ test("startup capture strips XDG_CONFIG_HOME line breaks before the absolute-pat
       `Global ${directory}`,
     );
   }
-  const previous = process.env.XDG_CONFIG_HOME;
-  // A leading line break makes the raw value relative.
-  process.env.XDG_CONFIG_HOME = `\n${config}`;
-  try {
-    for (const [host, expected] of [
-      [kilo, "Review Global kilo"],
-      [opencode, "Review {{include:body.md}}"],
-    ] as const) {
-      const project = join(root, `project-${host.globalDirectory}`);
-      await mkdir(project, { recursive: true });
-      const { input } = recordingToasts({
-        directory: project,
-        worktree: project,
-      });
-      const hooks = await createServer(host).server(input);
-      const current: Config = {
-        agent: { review: { prompt: "Review {{include:body.md}}" } },
-      };
-      await hooks.config!(current);
-      const prompt = current.agent!.review!.prompt;
-      if (host === kilo) {
-        assert.equal(prompt, expected);
-      } else {
-        // The raw value is not absolute, so OpenCode falls back to ~/.config.
-        assert.notEqual(prompt, "Review Global opencode");
+  // A leading line break makes the raw value relative, so OpenCode falls back
+  // to the empty home's .config, where the include is missing and expands to
+  // nothing.
+  await withEnvironment(
+    { ...isolatedHome(home), XDG_CONFIG_HOME: `\n${config}` },
+    async () => {
+      for (const [host, expected] of [
+        [kilo, "Review Global kilo"],
+        [opencode, "Review "],
+      ] as const) {
+        const project = join(root, `project-${host.globalDirectory}`);
+        await mkdir(project, { recursive: true });
+        const { input } = recordingToasts({
+          directory: project,
+          worktree: project,
+        });
+        const hooks = await createServer(host).server(input);
+        const current: Config = {
+          agent: { review: { prompt: "Review {{include:body.md}}" } },
+        };
+        await hooks.config!(current);
+        assert.equal(current.agent!.review!.prompt, expected);
       }
-    }
-  } finally {
-    if (previous === undefined) {
-      delete process.env.XDG_CONFIG_HOME;
-    } else {
-      process.env.XDG_CONFIG_HOME = previous;
-    }
-  }
+    },
+  );
 });
 
 test("Kilo checks ancestor roots together, keeping root order and the first failure in path order", async (t) => {
@@ -398,17 +428,24 @@ test("startup captures are not shared between profiles that read different direc
     await mkdir(join(root, directory, "prompts"), { recursive: true });
     await writeFile(join(root, directory, "prompts/body.md"), directory);
   }
+  const home = join(root, "home");
+  await mkdir(home);
   const custom = { ...kilo, projectDirectories: [".custom"] };
-  for (const [host, expected] of [
-    [kilo, "Review .kilo"],
-    [custom, "Review .custom"],
-  ] as const) {
-    const { input } = recordingToasts({ directory: root, worktree: root });
-    const hooks = await createServer(host).server(input);
-    const current: Config = {
-      agent: { review: { prompt: "Review {{include:body.md}}" } },
-    };
-    await hooks.config!(current);
-    assert.equal(current.agent!.review!.prompt, expected);
-  }
+  await withEnvironment(
+    { ...isolatedHome(home), XDG_CONFIG_HOME: join(home, ".config") },
+    async () => {
+      for (const [host, expected] of [
+        [kilo, "Review .kilo"],
+        [custom, "Review .custom"],
+      ] as const) {
+        const { input } = recordingToasts({ directory: root, worktree: root });
+        const hooks = await createServer(host).server(input);
+        const current: Config = {
+          agent: { review: { prompt: "Review {{include:body.md}}" } },
+        };
+        await hooks.config!(current);
+        assert.equal(current.agent!.review!.prompt, expected);
+      }
+    },
+  );
 });

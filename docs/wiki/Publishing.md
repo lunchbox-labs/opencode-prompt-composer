@@ -25,7 +25,7 @@ npm publish --workspace packages/kilo --tag bootstrap --access public
 git checkout -- .
 ```
 
-Use the package's own workspace, such as `packages/core` for `@lunchbox-labs/prompt-composer-core`. The bootstrap version is never used for a release and nothing should depend on it; npm may also point `latest` at it until the first stable release moves `latest`. Then add the package's trusted publisher as above, and start Release with **dry_run** to confirm that Verify passes before the first real run.
+Use the package's own workspace, such as `packages/core` for `@lunchbox-labs/prompt-composer-core`. The bootstrap version is never used for a release and nothing should depend on it; npm may also point `latest` at it until the first stable release moves `latest`. A bootstrapped adapter does not install, because it depends on a core version that is not on npm until the first real Release publishes the core at the same version, so run Release soon after bootstrapping. Then add the package's trusted publisher as above, and start Release with **dry_run** to confirm that Verify passes before the first real run.
 
 ## Prepare and run a release
 
