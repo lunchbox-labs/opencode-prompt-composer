@@ -6,17 +6,23 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 // A pull request that changes only these files skips the native matrix. The matrix
-// installs the packed package, which ships README.md and LICENSE, and the packed-package
-// test in the ungated check job asserts the pack contents, so such a pull request cannot
-// pass Check while breaking a native job. Every other path keeps the matrix: workflows,
-// scripts, package metadata and the documented examples all feed at least one check
-// that exercises the installed package. Wiki pages under docs/wiki/ are not packed and
-// no check reads them.
+// installs the packed packages, each of which ships its README.md and LICENSE, and the
+// packed-package test in the ungated check job asserts the pack contents, so such a pull
+// request cannot pass Check while breaking a native job. The root README.md and LICENSE
+// are not packed, and neither are those of the private packages/core, whose sources alone
+// the build bundles into each package. Every other path keeps the matrix: workflows, scripts, package
+// metadata, sources and the documented examples all feed at least one check that
+// exercises the installed packages. Wiki pages under docs/wiki/ are not packed and no
+// check reads them.
 export const documentationFiles = Object.freeze([
   "README.md",
   "AGENTS.md",
   "LICENSE",
   ".github/CODEOWNERS",
+  ...["core", "opencode", "kilo"].flatMap((name) => [
+    `packages/${name}/README.md`,
+    `packages/${name}/LICENSE`,
+  ]),
 ]);
 
 export const documentationDirectories = Object.freeze(["docs/wiki/"]);

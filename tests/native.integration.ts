@@ -19,6 +19,7 @@ import {
   exerciseConfigEditor,
   exercisePromptViewer,
 } from "./native-editors.ts";
+import { nativeHost } from "./hosts.ts";
 import { resolveNativeVersion, verifyNativeVersion } from "./native-host.ts";
 import { exerciseNativeTerminal, viewerCommands } from "./native-terminal.ts";
 import { prepareRipgrep } from "./native-ripgrep.ts";
@@ -26,9 +27,18 @@ import { prepareRipgrep } from "./native-ripgrep.ts";
 const execute = promisify(execFile);
 const npm = process.env.npm_execpath;
 assert.ok(npm !== undefined, "Run native tests through npm");
+const host = nativeHost();
+const product = host.profile.name;
+const configDirectory = host.projectDirectory;
+// The config-first coexistence leg pairs this plugin with the OpenCode-only
+// config-composer package, so it runs on the OpenCode host only.
+assert.ok(
+  host.id === "opencode" || process.env.CONFIG_COMPOSER_DIR === undefined,
+  "The config-first leg runs on the OpenCode host only",
+);
 
 test(
-  "npm-registered native hooks retain snippets until process restart and compose native skills",
+  `${product}: npm-registered native hooks retain snippets until process restart and compose native skills`,
   { timeout: 600_000 },
   async (t) => {
     const root = await realpath(
@@ -72,12 +82,13 @@ test(
       XDG_DATA_HOME: join(root, "data"),
       XDG_STATE_HOME: join(root, "state"),
       XDG_CACHE_HOME: join(root, "cache"),
-      OPENCODE_TEST_HOME: root,
-      OPENCODE_DB: join(root, "db.sqlite"),
-      OPENCODE_DISABLE_AUTOUPDATE: "1",
-      OPENCODE_DISABLE_MODELS_FETCH: "1",
-      OPENCODE_DISABLE_DEFAULT_PLUGINS: "true",
-      OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: "true",
+      [`${host.envPrefix}_TEST_HOME`]: root,
+      [`${host.envPrefix}_DB`]: join(root, "db.sqlite"),
+      [`${host.envPrefix}_DISABLE_AUTOUPDATE`]: "1",
+      [`${host.envPrefix}_DISABLE_MODELS_FETCH`]: "1",
+      [`${host.envPrefix}_DISABLE_DEFAULT_PLUGINS`]: "true",
+      [`${host.envPrefix}_EXPERIMENTAL_DISABLE_FILEWATCHER`]: "true",
+      ...host.extraEnv,
       NO_PROXY: "localhost,127.0.0.1,::1",
       no_proxy: "localhost,127.0.0.1,::1",
     });
@@ -88,29 +99,27 @@ test(
       USERPROFILE: env.USERPROFILE,
       npm_config_cache: env.npm_config_cache,
     };
-    const testSupport = JSON.parse(
-      await readFile(new URL("./opencode.json", import.meta.url), "utf8"),
-    ) as { range: string; floor: string };
+    const testSupport = JSON.parse(await readFile(host.support, "utf8")) as {
+      range: string;
+      floor: string;
+    };
     const range = testSupport.range;
-    verifyNativeVersion(testSupport.floor, range);
+    verifyNativeVersion(product, testSupport.floor, range);
+    const lane = process.env[host.versionVariable];
     const version = await resolveNativeVersion({
+      product,
+      cliPackage: host.cliPackage,
       npm,
       range,
       cache: join(root, "metadata-cache"),
       env: installEnv,
       signal: t.signal,
-      requested:
-        process.env.OPENCODE_TEST_VERSION === "floor"
-          ? testSupport.floor
-          : process.env.OPENCODE_TEST_VERSION,
+      requested: lane === "floor" ? testSupport.floor : lane,
     });
     t.diagnostic(
-      `Native OpenCode ${version}; tested OpenCode range=${range}; lane=${process.env.OPENCODE_TEST_VERSION ?? "latest-compatible"}`,
+      `Native ${product} ${version}; tested ${product} range=${range}; lane=${lane ?? "latest-compatible"}`,
     );
-    const name =
-      process.platform === "win32"
-        ? "opencode-windows-x64"
-        : "opencode-linux-x64";
+    const name = host.platformPackage(process.platform);
     // Install the exact canonical release into a fresh prefix. Missing platform
     // artifacts are failures; never silently fall back to an older host.
     await execute(
@@ -131,7 +140,7 @@ test(
       "host/node_modules",
       name,
       "bin",
-      process.platform === "win32" ? "opencode.exe" : "opencode",
+      process.platform === "win32" ? `${host.binary}.exe` : host.binary,
     );
     const actual = (
       await execute(binary, ["--version"], {
@@ -140,14 +149,27 @@ test(
         signal: t.signal,
       })
     ).stdout.trim();
-    verifyNativeVersion(version, range, actual);
+    verifyNativeVersion(product, version, range, actual);
     await prepareRipgrep(root, env, t.signal);
+    // Core is bundled into the package, so the package is packed and served
+    // alone.
     const packed = await execute(
       process.execPath,
-      [npm, "pack", "--ignore-scripts", "--json", "--pack-destination", root],
+      [
+        npm,
+        "pack",
+        "--workspace",
+        host.workspace,
+        "--ignore-scripts",
+        "--json",
+        "--pack-destination",
+        root,
+      ],
       { cwd: resolve("."), env: installEnv, timeout: 60_000, signal: t.signal },
     );
-    const [{ filename }] = JSON.parse(packed.stdout) as { filename: string }[];
+    const [pluginTarball] = (
+      JSON.parse(packed.stdout) as { name: string; filename: string }[]
+    ).map(({ filename }) => join(root, filename));
     const install = join(root, "installed");
     await execute(
       process.execPath,
@@ -159,21 +181,18 @@ test(
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
-        join(root, filename),
+        pluginTarball,
       ],
       { env: installEnv, timeout: 120_000, signal: t.signal },
     );
-    const plugin = join(
-      install,
-      "node_modules/@lunchbox-labs/opencode-prompt-composer",
-    );
+    const plugin = join(install, "node_modules", host.packageName);
     const project = join(root, "project");
-    const shared = join(root, "config/opencode");
+    const shared = join(root, "config", host.profile.globalDirectory);
     for (const path of [
-      join(project, ".opencode/prompts/review"),
-      join(project, ".opencode/agents"),
-      join(project, ".opencode/commands"),
-      join(project, ".opencode/skills/evidence"),
+      join(project, `${configDirectory}/prompts/review`),
+      join(project, `${configDirectory}/agents`),
+      join(project, `${configDirectory}/commands`),
+      join(project, `${configDirectory}/skills/evidence`),
       join(shared, "prompts/review"),
       join(shared, "prompts/personal"),
     ]) {
@@ -181,22 +200,28 @@ test(
     }
     await writeFile(join(shared, "prompts/review/body.md"), "Shared");
     await writeFile(
-      join(project, ".opencode/prompts/review/body.md"),
+      join(project, `${configDirectory}/prompts/review/body.md`),
       "Project {{include:review/nested.txt}}",
     );
     await writeFile(
-      join(project, ".opencode/prompts/review/nested.txt"),
+      join(project, `${configDirectory}/prompts/review/nested.txt`),
       "evidence",
     );
-    const skillOnlyPath = join(project, ".opencode/prompts/review/skill.txt");
-    const deletedPath = join(project, ".opencode/prompts/review/deleted.txt");
+    const skillOnlyPath = join(
+      project,
+      `${configDirectory}/prompts/review/skill.txt`,
+    );
+    const deletedPath = join(
+      project,
+      `${configDirectory}/prompts/review/deleted.txt`,
+    );
     await writeFile(skillOnlyPath, "Skill-only original");
     await writeFile(deletedPath, "Deleted original");
     await writeFile(
       join(shared, "prompts/review/override.txt"),
       "Global original",
     );
-    const agentPath = join(project, ".opencode/agents/review.md");
+    const agentPath = join(project, `${configDirectory}/agents/review.md`);
     // The project agent offers optional personal guidance from the global
     // prompts directory. The snippet is added only before the host restarts.
     const personalPath = join(shared, "prompts/personal/review.md");
@@ -204,19 +229,19 @@ test(
       "Use evidence.\n\nReview {{include:review/body.md}}\n\nState uncertainty.\n{{include?:personal/review.md}}";
     const agentText = `---\ndescription: Review changes\nmode: primary\n---\n${agentBody}`;
     await writeFile(agentPath, agentText);
-    const helperPath = join(project, ".opencode/agents/helper.md");
+    const helperPath = join(project, `${configDirectory}/agents/helper.md`);
     const helperText =
       "---\ndescription: Optional helper\nmode: subagent\ndisable: true\n---\nHelp {{include:review/body.md}}\n\nState uncertainty.\n\nHelper rule.";
     await writeFile(helperPath, helperText);
-    const buildPath = join(project, ".opencode/agents/build.md");
+    const buildPath = join(project, `${configDirectory}/agents/build.md`);
     const buildText =
       "---\ndescription: Custom build instructions\nmode: primary\n---\nBuild override {{include:review/body.md}}";
     await writeFile(buildPath, buildText);
     await writeFile(
-      join(project, ".opencode/commands/check.md"),
+      join(project, `${configDirectory}/commands/check.md`),
       "---\ndescription: Native command\nagent: review\nsubtask: true\n---\nCheck {{include:review/body.md}} $ARGUMENTS \\{{include:literal.md}}",
     );
-    const skillDirectory = join(project, ".opencode/skills/evidence");
+    const skillDirectory = join(project, `${configDirectory}/skills/evidence`);
     const skillBody = [
       "Skill {{include:review/body.md}}",
       "{{include:review/skill.txt}}",
@@ -233,37 +258,56 @@ test(
       process.platform === "win32" ? "reference.txt" : "{{include:wrapper.md}}",
     );
     await writeFile(skillFile, "Sampled filename, not prompt content.");
-    const obsoletePath = join(project, ".opencode/prompt-composer.jsonc");
+    const obsoletePath = join(
+      project,
+      `${configDirectory}/prompt-composer.jsonc`,
+    );
     const obsoleteText = "{ malformed obsolete policy: ignored";
     await writeFile(obsoletePath, obsoleteText);
-    const tarball = await readFile(join(root, filename));
-    const manifest = JSON.parse(
-      await readFile(join(plugin, "package.json"), "utf8"),
-    ) as { name: string; version: string };
+    // Serve the packed package under its real npm identity.
+    const served = await Promise.all(
+      [{ file: pluginTarball, directory: plugin, path: "/plugin.tgz" }].map(
+        async ({ file, directory, path }) => ({
+          path,
+          tarball: await readFile(file),
+          manifest: JSON.parse(
+            await readFile(join(directory, "package.json"), "utf8"),
+          ) as { name: string; version: string },
+        }),
+      ),
+    );
+    const [{ manifest }] = served;
     let registry = "";
     let tarballRequests = 0;
     const received: string[] = [];
     const modelServer = createServer((request, response) => {
-      if (decodeURIComponent(request.url ?? "") === `/${manifest.name}`) {
+      const url = decodeURIComponent(request.url ?? "");
+      const packument = served.find(
+        (entry) => url === `/${entry.manifest.name}`,
+      );
+      if (packument !== undefined) {
         response.writeHead(200, { "Content-Type": "application/json" });
         response.end(
           JSON.stringify({
-            name: manifest.name,
-            "dist-tags": { latest: manifest.version },
+            name: packument.manifest.name,
+            "dist-tags": { latest: packument.manifest.version },
             versions: {
-              [manifest.version]: {
-                ...manifest,
-                dist: { tarball: `${registry}/plugin.tgz` },
+              [packument.manifest.version]: {
+                ...packument.manifest,
+                dist: { tarball: `${registry}${packument.path}` },
               },
             },
           }),
         );
         return;
       }
-      if (request.url === "/plugin.tgz") {
-        tarballRequests++;
+      const download = served.find((entry) => request.url === entry.path);
+      if (download !== undefined) {
+        if (download.path === "/plugin.tgz") {
+          tarballRequests++;
+        }
         response.writeHead(200, { "Content-Type": "application/octet-stream" });
-        response.end(tarball);
+        response.end(download.tarball);
         return;
       }
       let text = "";
@@ -326,9 +370,10 @@ test(
     const plugins =
       configPlugin === undefined ? [npmPlugin] : [configPlugin, npmPlugin];
     await writeFile(
-      join(shared, "opencode.jsonc"),
+      join(shared, host.configFile),
       JSON.stringify({
         plugin: plugins,
+        ...host.extraConfig,
         model: "fixture/model",
         default_agent: "review",
         provider: {
@@ -352,7 +397,7 @@ test(
     );
     if (configPlugin !== undefined) {
       await writeFile(
-        join(project, ".opencode/config-composer.jsonc"),
+        join(project, `${configDirectory}/config-composer.jsonc`),
         JSON.stringify({
           componentGroups: { review: { agents: ["review"] } },
           profiles: {
@@ -373,7 +418,7 @@ test(
     }
     // Match the native test harness: preinstall the genuine pinned SDK in each
     // config directory, avoiding platform-dependent cold dependency bootstrap.
-    for (const directory of [shared, join(project, ".opencode")]) {
+    for (const directory of [shared, join(project, configDirectory)]) {
       await writeFile(
         join(directory, "package.json"),
         JSON.stringify({ private: true, type: "module" }),
@@ -389,7 +434,7 @@ test(
           "--no-audit",
           "--no-fund",
           "--save-exact",
-          `@opencode-ai/plugin@${version}`,
+          `${host.pluginPackage}@${version}`,
         ],
         { cwd: directory, env: installEnv, timeout: 120_000, signal: t.signal },
       );
@@ -451,11 +496,11 @@ test(
           break;
         }
         if (child.exitCode !== null) {
-          throw new Error(`OpenCode exited: ${logs}`);
+          throw new Error(`${product} exited: ${logs}`);
         }
         await setTimeout(100);
       }
-      assert.ok(url !== undefined, `OpenCode did not start: ${logs}`);
+      assert.ok(url !== undefined, `${product} did not start: ${logs}`);
     }
     await startHost();
     async function api(path: string, body?: unknown): Promise<unknown> {
@@ -463,7 +508,7 @@ test(
         method: body === undefined ? "GET" : "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-opencode-directory": project,
+          [host.directoryHeader]: project,
         },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.any([t.signal, AbortSignal.timeout(60_000)]),
@@ -490,7 +535,7 @@ test(
       const stop = new AbortController();
       t.after(() => stop.abort());
       const response = await fetch(`${url}/event`, {
-        headers: { "x-opencode-directory": project },
+        headers: { [host.directoryHeader]: project },
         signal: AbortSignal.any([t.signal, stop.signal]),
       });
       assert.ok(response.ok && response.body !== null, logs);
@@ -584,7 +629,7 @@ test(
       "Check Project evidence $ARGUMENTS {{include:literal.md}}",
     );
     assert.equal(config.command.check.subtask, true);
-    // OpenCode derives skill commands after config hooks, directly from cached
+    // The host derives skill commands after config hooks, directly from cached
     // skill content. They do not pass through the skill tool's after hook.
     assert.equal(config.command.evidence, undefined);
     const nativeCommands = (await api("/command")) as {
@@ -656,17 +701,17 @@ test(
     // The first skill-tool invocation happens only after these edits. Config
     // loading must already have captured snippets unused by agents/commands.
     await writeFile(
-      join(project, ".opencode/prompts/review/nested.txt"),
+      join(project, `${configDirectory}/prompts/review/nested.txt`),
       "updated",
     );
     await writeFile(skillOnlyPath, "Skill-only updated");
     await rm(deletedPath);
     await writeFile(
-      join(project, ".opencode/prompts/review/override.txt"),
+      join(project, `${configDirectory}/prompts/review/override.txt`),
       "Project added",
     );
     await writeFile(
-      join(project, ".opencode/prompts/literal.md"),
+      join(project, `${configDirectory}/prompts/literal.md`),
       "An escaped marker must never expand twice.",
     );
     const subsequent = (await api("/config")) as typeof config;
@@ -766,7 +811,10 @@ test(
     );
     assert.equal(await readFile(obsoletePath, "utf8"), obsoleteText);
     if (configPlugin !== undefined) {
-      const profilePath = join(project, ".opencode/config-composer.jsonc");
+      const profilePath = join(
+        project,
+        `${configDirectory}/config-composer.jsonc`,
+      );
       const profile = JSON.parse(await readFile(profilePath, "utf8")) as {
         activeProfiles: string[];
       };
@@ -853,7 +901,7 @@ test(
     await writeFile(agentPath, agentText);
     await writeFile(personalPath, "  Personal review guidance.\n");
     for (const [name, text] of Object.entries(viewerCommands)) {
-      await writeFile(join(project, ".opencode/commands", name), text);
+      await writeFile(join(project, `${configDirectory}/commands`, name), text);
     }
     const restartedSkillText = changedSkillText.replace(
       "{{include:review/deleted.txt}}\n",

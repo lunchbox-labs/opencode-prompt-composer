@@ -8,40 +8,70 @@ const prereleaseVersion = new RegExp(
   "i",
 );
 
+const repository =
+  "git+https://github.com/lunchbox-labs/opencode-prompt-composer.git";
+
+/** The published packages in publication order. */
+export const releasePackages = Object.freeze([
+  Object.freeze({
+    directory: "packages/opencode",
+    name: "@lunchbox-labs/opencode-prompt-composer",
+  }),
+  Object.freeze({
+    directory: "packages/kilo",
+    name: "@lunchbox-labs/kilo-prompt-composer",
+  }),
+]);
+
+/**
+ * The private workspace package that each host package bundles at build time.
+ * It is never published, so no published manifest may name it. npm links every
+ * workspace into node_modules, so the build resolves it without a dependency.
+ */
+export const corePackage = "@lunchbox-labs/prompt-composer-core";
+const dependencyFields = [
+  "dependencies",
+  "optionalDependencies",
+  "peerDependencies",
+  "devDependencies",
+];
+
 // A pre-release run publishes a pre-release version only, and a normal run a
 // stable version only, so npm's latest tag never moves to a pre-release.
-export function validateRelease(
+/** Validates one package manifest and its lockfile entry for publication. */
+export function validatePackage(
   manifest,
+  { directory, name },
   tag,
   lock,
   { prerelease = false } = {},
 ) {
   if (manifest.private !== undefined && manifest.private !== false) {
     throw new Error(
-      "Remove the private publication guard only after release setup is approved.",
+      `${name}: remove the private publication guard only after release setup is approved.`,
     );
   }
-  if (manifest.name !== "@lunchbox-labs/opencode-prompt-composer") {
-    throw new Error(
-      "The npm package name must be @lunchbox-labs/opencode-prompt-composer.",
-    );
+  if (manifest.name !== name) {
+    throw new Error(`The npm package name in ${directory} must be ${name}.`);
   }
   if (typeof manifest.version !== "string" || manifest.version === "0.0.0") {
-    throw new Error("Publishing requires a non-placeholder semantic version.");
+    throw new Error(
+      `${name}: publishing requires a non-placeholder semantic version.`,
+    );
   }
   if (prerelease && !prereleaseVersion.test(manifest.version)) {
     throw new Error(
-      "A pre-release requires a pre-release semantic version, such as 1.2.3-beta.1.",
+      `${name}: a pre-release requires a pre-release semantic version, such as 1.2.3-beta.1.`,
     );
   }
   if (!prerelease && !stableVersion.test(manifest.version)) {
     throw new Error(
-      "A release requires a stable semantic version; publish pre-release versions as a pre-release.",
+      `${name}: a release requires a stable semantic version; publish pre-release versions as a pre-release.`,
     );
   }
   if (tag !== `v${manifest.version}`) {
     throw new Error(
-      "The release tag must equal v followed by the package version.",
+      `${name}: the release tag must equal v followed by the package version.`,
     );
   }
   const access = manifest.publishConfig?.access;
@@ -50,15 +80,12 @@ export function validateRelease(
     (access === "restricted" && !manifest.name.startsWith("@"))
   ) {
     throw new Error(
-      "Set an approved publishConfig.access; restricted packages require a scope.",
+      `${name}: set an approved publishConfig.access; restricted packages require a scope.`,
     );
   }
-  if (
-    manifest.repository?.url !==
-    "git+https://github.com/lunchbox-labs/opencode-prompt-composer.git"
-  ) {
+  if (manifest.repository?.url !== repository) {
     throw new Error(
-      "The package repository must match the trusted publisher repository.",
+      `${name}: the package repository must match the trusted publisher repository.`,
     );
   }
   if (
@@ -66,39 +93,79 @@ export function validateRelease(
     manifest.publishConfig.registry !== "https://registry.npmjs.org"
   ) {
     throw new Error(
-      "This workflow publishes only to https://registry.npmjs.org.",
+      `${name}: this workflow publishes only to https://registry.npmjs.org.`,
     );
   }
-  if (
-    lock?.name !== manifest.name ||
-    lock?.version !== manifest.version ||
-    lock?.packages?.[""]?.name !== manifest.name ||
-    lock?.packages?.[""]?.version !== manifest.version
-  ) {
+  const entry = lock?.packages?.[directory];
+  if (entry?.name !== manifest.name || entry?.version !== manifest.version) {
     throw new Error(
-      "The lockfile package name and version must match the release manifest.",
+      `${name}: the lockfile package name and version must match the release manifest.`,
     );
   }
   return { name: manifest.name, version: manifest.version, access };
 }
 
+/**
+ * Validates the two host manifests, in releasePackages order, as one release:
+ * one version, one access, and no dependency on the bundled core.
+ */
+export function validateRelease(manifests, tag, lock, options = {}) {
+  if (
+    !Array.isArray(manifests) ||
+    manifests.length !== releasePackages.length
+  ) {
+    throw new Error(
+      "A release validates the OpenCode and Kilo packages together.",
+    );
+  }
+  const results = releasePackages.map((expected, index) =>
+    validatePackage(manifests[index], expected, tag, lock, options),
+  );
+  const [{ version, access }] = results;
+  if (results.some((result) => result.version !== version)) {
+    throw new Error(
+      "packages/opencode and packages/kilo must hold the same version.",
+    );
+  }
+  if (results.some((result) => result.access !== access)) {
+    throw new Error("Every released package must have the same access.");
+  }
+  for (const [index, manifest] of manifests.entries()) {
+    const bundled = [
+      ...dependencyFields.map((field) => manifest[field]?.[corePackage]),
+      ...[manifest.bundleDependencies, manifest.bundledDependencies]
+        .flat()
+        .filter((name) => name === corePackage),
+    ];
+    if (bundled.some((value) => value !== undefined)) {
+      throw new Error(
+        `${results[index].name} bundles ${corePackage} at build time, so it must not list it as a dependency.`,
+      );
+    }
+  }
+  return {
+    version,
+    access,
+    packages: results.map((result) => result.name),
+  };
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const manifest = JSON.parse(
-    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  const read = (path) =>
+    JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
+  const result = validateRelease(
+    releasePackages.map(({ directory }) => read(`${directory}/package.json`)),
+    process.env.RELEASE_TAG,
+    read("package-lock.json"),
+    { prerelease: process.env.RELEASE_PRERELEASE === "true" },
   );
-  const lock = JSON.parse(
-    readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"),
-  );
-  const result = validateRelease(manifest, process.env.RELEASE_TAG, lock, {
-    prerelease: process.env.RELEASE_PRERELEASE === "true",
-  });
   if (process.env.GITHUB_OUTPUT) {
     appendFileSync(
       process.env.GITHUB_OUTPUT,
-      `access=${result.access}\nname=${result.name}\nversion=${result.version}\n`,
+      `access=${result.access}\npackages=${result.packages.join(" ")}\nversion=${result.version}\n`,
     );
   }
   console.log(
-    `Validated ${result.name}@${result.version} for ${result.access} publication.`,
+    `Validated ${result.packages.join(", ")} at ${result.version} for ${result.access} publication.`,
   );
 }

@@ -15,13 +15,14 @@ const semver = createRequire(import.meta.url)("semver") as {
 const execute = promisify(execFile);
 
 export function verifyNativeVersion(
+  product: string,
   version: string,
   range: string,
   actual?: string,
 ): void {
   assert.ok(
     semver.validRange(range) !== null,
-    `Invalid tested OpenCode range: ${range}`,
+    `Invalid tested ${product} range: ${range}`,
   );
   assert.equal(
     semver.valid(version),
@@ -30,7 +31,7 @@ export function verifyNativeVersion(
   );
   assert.ok(
     semver.satisfies(version, range),
-    `OpenCode ${version} does not satisfy tested OpenCode range ${range}`,
+    `${product} ${version} does not satisfy tested ${product} range ${range}`,
   );
   if (actual !== undefined) {
     assert.equal(
@@ -42,6 +43,10 @@ export function verifyNativeVersion(
 }
 
 export async function resolveNativeVersion(options: {
+  /** Product name for messages, such as "OpenCode". */
+  product: string;
+  /** The host's canonical npm release package, such as "opencode-ai". */
+  cliPackage: string;
   npm: string;
   range: string;
   cache: string;
@@ -51,13 +56,13 @@ export async function resolveNativeVersion(options: {
 }): Promise<string> {
   assert.ok(
     semver.validRange(options.range) !== null,
-    `Invalid tested OpenCode range: ${options.range}`,
+    `Invalid tested ${options.product} range: ${options.range}`,
   );
   if (
     options.requested !== undefined &&
     options.requested !== "latest-compatible"
   ) {
-    verifyNativeVersion(options.requested, options.range);
+    verifyNativeVersion(options.product, options.requested, options.range);
     return options.requested;
   }
   // Query the canonical release package, not a platform artifact or dist-tag.
@@ -71,7 +76,7 @@ export async function resolveNativeVersion(options: {
       [
         options.npm,
         "view",
-        `opencode-ai@${options.range}`,
+        `${options.cliPackage}@${options.range}`,
         "version",
         "--json",
         "--prefer-online",
@@ -93,9 +98,9 @@ export async function resolveNativeVersion(options: {
     const version = semver.maxSatisfying(versions, options.range);
     assert.ok(
       version !== null,
-      `No compatible OpenCode release for ${options.range}`,
+      `No compatible ${options.product} release for ${options.range}`,
     );
-    verifyNativeVersion(version, options.range);
+    verifyNativeVersion(options.product, version, options.range);
     return version;
   } finally {
     await rm(freshCache, { recursive: true, force: true });

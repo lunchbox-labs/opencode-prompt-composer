@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@opentui/*": ["./node_modules/@opentui/*"],
+      "@opentui/keymap/extras": [
+        "./node_modules/@opentui/keymap/src/extras/index.d.ts"
+      ]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -1,16 +1,16 @@
 # State machines
 
-This document describes the state Prompt Composer keeps across hooks, events and reloads. Update it in the same PR as any change to these states, their triggers or their exits, following the [state machine conventions](https://github.com/lunchbox-labs/.github/blob/main/agent-guidance/state-machines.md), and cover each transition you add or change in `tests/`. Known bugs belong in issues, not here.
+This document describes the state Prompt Composer keeps across hooks, events and reloads. Update it in the same PR as any change to these states, their triggers or their exits, following the [state machine conventions](https://github.com/lunchbox-labs/.github/blob/main/agent-guidance/state-machines.md), and cover each transition you add or change in `packages/core/tests/`. Paths below are relative to `packages/core`, which the build bundles into both host packages. Known bugs belong in issues, not here.
 
-OpenCode reruns the server plugin's factory on every instance load but keeps the imported module, so module-level state lasts for the process and closure state is rebuilt on each reload.
+OpenCode and Kilo rerun the server plugin's factory on every instance load but keep the imported module, so module-level state lasts for the process and closure state is rebuilt on each reload. The bundle emits each core module once per package, so a package has one copy of each module-level state; a module that several entries use, such as the include engine and its error classes, goes to a chunk they share. Every state below is the same for both hosts except where a host profile (`src/host.ts`) is named.
 
 ## Snippet capture cache
 
-`snapshots` in `src/startup-snippets.ts` maps each resolved directory and worktree pair to the promise of its capture. `startupSnippets` returns the existing promise for a key, so every factory for the same project shares one capture until OpenCode restarts.
+`snapshots` in `src/startup-snippets.ts` maps each host name and resolved directory and worktree pair to the promise of its capture. `startupSnippets` returns the existing promise for a key, so every factory for the same project and host shares one capture until the host restarts, and two hosts never share one. The capture resolves the host's home and custom config directory once, when it starts; the Kilo profile trims surrounding whitespace from the home directory first, as Kilo does.
 
 - The first factory for a key starts `capture()`.
 - A capture that resolves, with or without warnings, is kept for the rest of the process.
-- A capture that rejects, which in practice means `discoveryDirectories` failed (the ancestor limit, or an unexpected `lstat` error on a `.opencode` directory), is evicted so a later factory captures again. Every factory that received the promise while it was pending keeps the rejection, so its config hooks keep the native prompts with an error toast until the next reload.
+- A capture that rejects, which in practice means `discoveryDirectories` failed (the ancestor limit, or an unexpected `lstat` error on a project config directory such as `.opencode`, `.kilocode` or `.kilo`), is evicted so a later factory captures again. Every factory that received the promise while it was pending keeps the rejection, so its config hooks keep the native prompts with an error toast until the next reload.
 
 ```mermaid
 stateDiagram-v2
@@ -31,7 +31,7 @@ stateDiagram-v2
 - Failed reads are then read again, as when an editor was saving the file mid-read. A read that failed because the file was replaced between being checked and opened is always a change; any other failed read is a change when it now succeeds or fails with a different message. A failure that repeats unchanged, such as an invalid or unreadable file, is kept.
 - The inventory is discovered again; a different set of discovered directories, names or paths is a change.
 
-A change starts another attempt. On the last attempt the latest reads are kept with a warning to restart OpenCode once edits settle. The result is frozen inside the `expand` closure, and an error entry is thrown again each time an include uses it; an entry for a file that was still being replaced says to restart OpenCode once edits settle, since every later hook reuses the capture.
+A change starts another attempt. On the last attempt the latest reads are kept with a warning to restart the host (named by its profile) once edits settle. The result is frozen inside the `expand` closure, and an error entry is thrown again each time an include uses it; an entry for a file that was still being replaced says to restart the host once edits settle, since every later hook reuses the capture.
 
 ```mermaid
 stateDiagram-v2
@@ -85,7 +85,7 @@ These have no state that outlives one call:
 
 - Composition (`src/runtime.ts`) gives each agent or command one outcome: composed, composed with warnings, native kept (an empty result with problems, or `expand` threw, for example at the size limit), or skipped (an agent that is disabled or whose prompt is blank or not a string, or a command whose template is not a string).
 - Include expansion (`src/include-core.ts`) tracks an include count, `limitReported` and the recursion stack for cycle checks. An escaped marker is written literally, a malformed one is left as written with a warning, a failing one expands to nothing with a warning, and exceeding `promptSize` throws an `IncludeError` that the caller turns into a fallback.
-- The skill output gate (`src/skill-body.ts`) is a chain of checks. Every exit except a successful expansion returns the native output, with a toast unless nothing needed doing.
+- The skill output gate (`src/skill-body.ts`) is a chain of checks. Every exit except a successful expansion returns the native output, with a toast unless nothing needed doing. After the metadata check it takes one of two framing branches: when the host profile has a `builtinSkillDirectory` (Kilo's `builtin`) and the metadata `dir` equals it, the body must end at the closing tag; otherwise the body must end before the base-directory and sampled-file footer. A built-in output that does not match its framing exits with the unknown-framing notice, and the OpenCode profile never takes the built-in branch.
 - Discovery (`src/discovery.ts`) counts entries and, in lenient mode, leaves out entries that fail with `leaveOut`. `EntryLimitError` stops the walk and becomes one warning.
 
 ## TUI dialog navigation

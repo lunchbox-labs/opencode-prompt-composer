@@ -15,6 +15,15 @@ test("pull requests that change only documentation skip the native matrix", () =
   assert.equal(nativeChecksRequired(["README.md"]), false);
   assert.equal(nativeChecksRequired([...documentationFiles]), false);
   assert.equal(
+    nativeChecksRequired([
+      "packages/core/README.md",
+      "packages/opencode/README.md",
+      "packages/kilo/README.md",
+      "packages/kilo/LICENSE",
+    ]),
+    false,
+  );
+  assert.equal(
     nativeChecksRequired(["docs/wiki/Usage.md", "docs/wiki/_Sidebar.md"]),
     false,
   );
@@ -22,13 +31,24 @@ test("pull requests that change only documentation skip the native matrix", () =
 
 test("every other change keeps the native matrix", () => {
   const files = [
-    "src/server.ts",
+    "packages/core/src/server.ts",
+    "packages/core/tests/runtime.test.ts",
+    "packages/opencode/src/server.ts",
+    "packages/kilo/src/tui.ts",
     "tests/native.integration.ts",
+    "tests/hosts.ts",
+    "tests/kilo.json",
     "scripts/validate-release.mjs",
     "package.json",
+    "packages/core/package.json",
+    "packages/kilo/package.json",
+    "tsdown.config.mjs",
     "package-lock.json",
     ".github/workflows/check.yml",
-    "docs/examples/review/.opencode/agents/review.md",
+    "packages/opencode/docs/examples/review/.opencode/agents/review.md",
+    "packages/kilo/docs/examples/review/.kilo/agents/review.md",
+    "packages/kilo/docs/examples/review/README.md",
+    "packages/README.md",
     "docs/README.md",
     "docs/wiki.md",
     ".github/workflows/wiki.yml",
@@ -119,14 +139,14 @@ test("pull request changes are read from the merge commit against its base", asy
     );
 
   git("init", "--quiet", "--initial-branch=main");
-  await commit("src/server.ts", "export {};\n", "base");
+  await commit("packages/core/src/server.ts", "export {};\n", "base");
   await commit("README.md", "# Base\n", "readme");
   git("checkout", "--quiet", "-b", "docs");
   await commit("README.md", "# Updated\n", "update the readme");
   const head = git("rev-parse", "HEAD");
   git("checkout", "--quiet", "main");
   await commit(
-    "src/server.ts",
+    "packages/core/src/server.ts",
     "export const moved = true;\n",
     "base moves on",
   );

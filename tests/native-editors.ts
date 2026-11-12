@@ -12,7 +12,7 @@ import {
   destroyFixedMenu,
   dialogView,
   fixedMenuApi,
-} from "./fixed-menu-harness.ts";
+} from "../packages/core/tests/fixed-menu-harness.ts";
 
 export type Request = (path: string, body?: unknown) => Promise<unknown>;
 interface View {
