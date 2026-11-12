@@ -6,9 +6,10 @@ import { defineConfig } from "tsdown";
 // and output are relative to the package, not to this file.
 //
 // The private core is bundled into the package, and every other import stays
-// a bare import that the host provides. The three entries build together, so a
-// module more than one of them uses, such as the startup snippet cache, is
-// emitted once in a shared chunk instead of being copied into each entry.
+// a bare import that the host provides. The three entries build together, so
+// each core module is emitted once per package: a module more than one entry
+// uses, such as the include engine and its error classes, goes to a shared
+// chunk instead of being copied into each entry.
 
 /** The plugin package whose types the package's declarations refer to. */
 function hostPlugin() {
@@ -23,21 +24,35 @@ function hostPlugin() {
   return plugins[name];
 }
 
+const entries = ["server", "includes", "tui"];
+
+// A declaration that fails to emit is only a warning in the declaration
+// plugin and leaves an empty `export {}`, so the build checks each entry's.
+function requireDeclarations({ chunks }) {
+  for (const entry of entries) {
+    const declaration = chunks.find(
+      (chunk) => chunk.fileName === `${entry}.d.ts`,
+    );
+    const code = declaration?.type === "chunk" ? declaration.code : "";
+    if (!/^export\s+(?!\{\s*\};?\s*$)/m.test(code)) {
+      throw new Error(`dist/${entry}.d.ts declares no exports.`);
+    }
+  }
+}
+
 export default defineConfig({
   cwd: process.cwd(),
-  entry: {
-    server: "src/server.ts",
-    includes: "src/includes.ts",
-    tui: "src/tui.ts",
-  },
+  entry: Object.fromEntries(entries.map((entry) => [entry, `src/${entry}.ts`])),
   outDir: "dist",
   format: "esm",
   platform: "node",
   target: "node22.18",
   fixedExtension: false,
-  // Core's sources sit outside the package's tsconfig, so the declaration
-  // program is built from every file the entries import.
+  // Load every file the package's tsconfig lists into the declaration
+  // program up front. Without it, the declarations re-exported from core's
+  // sources, which sit outside that tsconfig, come out empty.
   dts: { tsc: { eager: true } },
+  hooks: { "build:done": requireDeclarations },
   minify: false,
   failOnWarn: true,
   deps: {

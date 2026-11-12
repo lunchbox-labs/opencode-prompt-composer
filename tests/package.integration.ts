@@ -9,7 +9,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { promisify } from "node:util";
@@ -292,8 +292,9 @@ console.log(id, same.id, tuiId, limit);
       );
       // No installed file refers to core, and the build inlined only core's
       // and the package's own sources: no file comes from node_modules, and
-      // each core module is inlined once, so modules the entries share, such
-      // as the startup snippet cache, have one instance.
+      // each core module is inlined once per package. The include engine and
+      // its error classes, which the server and includes entries share, sit
+      // in a shared chunk, so both entries use one instance of them.
       const installed = join(root, "node_modules", packageName);
       const inlined = new Map<string, string[]>();
       for (const file of await filesUnder(installed)) {
@@ -311,6 +312,12 @@ console.log(id, same.id, tuiId, limit);
         }
       }
       assert.ok(inlined.has("../core/src/startup-snippets.ts"));
+      const engine = inlined.get("../core/src/include-core.ts")?.[0];
+      assert.ok(engine !== undefined);
+      assert.ok(
+        !["server.js", "includes.js"].includes(basename(engine)),
+        `The include engine is inlined in ${engine}, not a shared chunk`,
+      );
       for (const [source, copies] of inlined) {
         assert.equal(
           copies.length,

@@ -1022,18 +1022,26 @@ test(
       examplePackages.map((name) => `npm view ${name} name`),
     );
     // Every missing name is reported, not only the first.
-    const missing = await run(
-      `if [ "$2" != "@lunchbox-labs/example-one" ]; then echo "npm error code E404" >&2; exit 1; fi; echo "$2"`,
-    );
+    const missing = await run(`echo "npm error code E404" >&2; exit 1`);
     assert.equal(missing.code, 1);
     assert.equal(missing.calls.length, examplePackages.length);
-    for (const name of examplePackages.slice(1)) {
+    for (const name of examplePackages) {
       assert.match(
         missing.stdout,
         new RegExp(`::error::${name.replaceAll("/", "\\/")} is not on npm`),
       );
     }
-    assert.doesNotMatch(missing.stdout, /example-one is not on npm/);
+    // A name that is on npm is not reported.
+    const one = await run(
+      `if [ "$2" = "@lunchbox-labs/example-one" ]; then echo "$2"; exit 0; fi; echo "npm error code E404" >&2; exit 1`,
+    );
+    assert.equal(one.code, 1);
+    assert.equal(one.calls.length, examplePackages.length);
+    assert.match(
+      one.stdout,
+      /::error::@lunchbox-labs\/example-two is not on npm/,
+    );
+    assert.doesNotMatch(one.stdout, /example-one is not on npm/);
     const offline = await run(`echo "npm error code ECONNRESET" >&2; exit 1`);
     assert.equal(offline.code, 1);
     assert.match(offline.stderr, /ECONNRESET/);
