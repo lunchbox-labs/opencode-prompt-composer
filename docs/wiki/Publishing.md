@@ -15,17 +15,29 @@ The publish job has `id-token: write` for OIDC and `contents: read`. It installs
 
 ## Bootstrap a new package name
 
-Verify stops a run when any of the three package names is not on npm, before anything is published, so a missing name never leaves a release half-published. To add a package name, a maintainer with publish rights in the `lunchbox-labs` npm organization publishes a throwaway pre-release of it once, from a local checkout of `main`, under its own dist-tag:
+Verify stops a run when any of the three package names is not on npm, before anything is published. To add a package name, a maintainer with publish rights in the `lunchbox-labs` npm organization publishes a placeholder of it once, under its own dist-tag. The placeholder is a bare manifest with no code and no dependencies, not the built package: npm points `latest` at a package's first version until a stable release moves it, and an install of `latest` must not fail on a core version that isn't on npm yet. In an empty directory outside the repository:
 
 ```sh
-npm ci
-npm run build
-npm version 0.0.0-bootstrap.0 --no-git-tag-version --workspace packages/kilo
-npm publish --workspace packages/kilo --tag bootstrap --access public
-git checkout -- .
+cat > package.json <<'JSON'
+{
+  "name": "@lunchbox-labs/kilo-prompt-composer",
+  "version": "0.0.0-bootstrap.0",
+  "description": "Placeholder that reserves the name; install a released version.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lunchbox-labs/opencode-prompt-composer.git"
+  }
+}
+JSON
+npm publish --tag bootstrap --access public
+npm deprecate @lunchbox-labs/kilo-prompt-composer@0.0.0-bootstrap.0 "Placeholder; install a released version."
+npm dist-tag ls @lunchbox-labs/kilo-prompt-composer
 ```
 
-Use the package's own workspace, such as `packages/core` for `@lunchbox-labs/prompt-composer-core`. The bootstrap version is never used for a release and nothing should depend on it; npm may also point `latest` at it until the first stable release moves `latest`. A bootstrapped adapter does not install, because it depends on a core version that is not on npm until the first real Release publishes the core at the same version, so run Release soon after bootstrapping. Then add the package's trusted publisher as above, and start Release with **dry_run** to confirm that Verify passes before the first real run.
+Use the package's own name, such as `@lunchbox-labs/prompt-composer-core`. The bootstrap version is never used for a release. `npm dist-tag ls` shows where `bootstrap` and `latest` point; `latest` moves to the first stable version that Release publishes. Then add the package's trusted publisher as above.
+
+Start Release with **dry_run** to confirm that Verify passes. A dry run stops before npm, so it does not exercise the trusted publisher or OIDC. If a trusted publisher is missing or wrong, the first real run publishes the packages before that one and fails at it. Fix the publisher and re-run only the failed jobs within the artifact's three days: Publish npm skips the packages npm already holds with the same tarballs and publishes the rest.
 
 ## Prepare and run a release
 
