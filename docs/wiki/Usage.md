@@ -1,14 +1,22 @@
 # Usage
 
-Prompt Composer expands reusable text in native OpenCode agent prompts, command templates and skill-tool bodies. It requires Node 22.18+ and is tested with OpenCode 1.19.x, starting at 1.19.0. It works independently of Config Composer.
+Prompt Composer expands reusable text in native agent prompts, command templates and skill-tool bodies of OpenCode and Kilo CLI. It requires Node 22.18+. The OpenCode package is tested with OpenCode 1.19.x, starting at 1.19.0, and the Kilo package with Kilo CLI 7.8.x, starting at 7.8.27. It works independently of Config Composer.
 
 ## Install
 
-Add the package to `plugin` in `opencode.jsonc`, and to `tui.jsonc` for the prompt viewer:
+For OpenCode, add the package to `plugin` in `opencode.jsonc`, and to `tui.jsonc` for the prompt viewer:
 
 ```jsonc
 { "plugin": ["@lunchbox-labs/opencode-prompt-composer"] }
 ```
+
+For Kilo CLI, add the Kilo package to `plugin` in `kilo.jsonc`, and to `tui.jsonc` for the prompt viewer:
+
+```jsonc
+{ "plugin": ["@lunchbox-labs/kilo-prompt-composer"] }
+```
+
+The rest of this page applies to both hosts. Examples use OpenCode's directories; Kilo reads `.kilocode` and `.kilo` in their place, and `~/.config/kilo` for global config, as [Discovery](Discovery) lists.
 
 ## Include reusable text
 
@@ -28,13 +36,13 @@ Use `{{include?:personal/review.md}}` for optional guidance. If no discovered `p
 
 Keep all guidance in native bodies and snippet files. There is no Prompt Composer settings file, and plugin options are ignored with a warning. Agent metadata and command placeholders such as `$ARGUMENTS` and `$1` remain native. Disabled agents and agents with no nonblank authored prompt keep their existing text or native fallback.
 
-Skill bodies expand when the native `skill` tool returns them. Automatically generated skill slash commands do not pass through that hook and do not expand includes; running one that contains include markers shows a warning once per skill. Skill discovery and permissions remain OpenCode's responsibility.
+Skill bodies expand when the native `skill` tool returns them. Automatically generated skill slash commands do not pass through that hook and do not expand includes; running one that contains include markers shows a warning once per skill. Skill discovery and permissions remain the host's responsibility. Kilo's built-in skills, which Kilo frames without a base directory or file list, expand too.
 
 ## Snippet lifetime
 
-The plugin captures the project's winning snippet files when it first initializes in the server process, including snippets first used by later skill calls. Edits, additions and removals are visible after restarting that process. Instance disposal alone does not refresh snippets, except that a capture that failed is retried. Restart the OpenCode server after editing snippets or native prompt definitions.
+The plugin captures the project's winning snippet files when it first initializes in the server process, including snippets first used by later skill calls. Edits, additions and removals are visible after restarting that process. Instance disposal alone does not refresh snippets, except that a capture that failed is retried. Restart the OpenCode or Kilo server after editing snippets or native prompt definitions.
 
-Include problems never stop a prompt from loading. A failing include expands to nothing, a malformed marker stays as written, and a prompt over the 256 KiB limit, or one with nothing left once failed includes are left out, keeps its native text; other agents, commands and skills compose normally. A warning toast names the consumer and shows the first problem with its logical include chain and, for nested snippets, the snippet position; the OpenCode log lists every problem. If the prompts directories cannot be read at all, an error toast appears and everything keeps its native text. Diagnostics omit prompt bodies.
+Include problems never stop a prompt from loading. A failing include expands to nothing, a malformed marker stays as written, and a prompt over the 256 KiB limit, or one with nothing left once failed includes are left out, keeps its native text; other agents, commands and skills compose normally. A warning toast names the consumer and shows the first problem with its logical include chain and, for nested snippets, the snippet position; the host's log lists every problem. If the prompts directories cannot be read at all, an error toast appears and everything keeps its native text. Diagnostics omit prompt bodies.
 
 ## View loaded prompts
 
@@ -44,12 +52,14 @@ The viewer shows loaded text without executing command syntax, expanding markers
 
 ## Includes and native file references
 
-OpenCode substitutes `{file:path}` inside JSON configuration strings before plugins run. The path resolves relative to the configuration file or `~/`; the reference is not recursive, has no escape, and a missing file fails configuration loading. Use it to load one whole prompt from a file.
+OpenCode and Kilo substitute `{file:path}` inside JSON configuration strings before plugins run. The path resolves relative to the configuration file or `~/`; the reference is not recursive, has no escape, and a missing file fails configuration loading. Use it to load one whole prompt from a file.
 
 Includes also work inside Markdown agent, command and skill bodies. They expand recursively, resolve against discovered `prompts/` directories and accept the `\{{include:...}}` escape. A prompt loaded through `{file:}` can contain includes because the plugin receives the substituted text. Optional includes have no `{file:}` equivalent.
 
 ## Examples
 
-- [Review guidance](https://github.com/lunchbox-labs/opencode-prompt-composer/tree/main/docs/examples/review) shares a findings format between an agent and command.
-- [On-demand verification](https://github.com/lunchbox-labs/opencode-prompt-composer/tree/main/docs/examples/skill-guidance) loads a checklist through a skill.
+Each package ships the same two examples, laid out for its host:
+
+- Review guidance shares a findings format between an agent and command: [OpenCode](https://github.com/lunchbox-labs/opencode-prompt-composer/tree/main/packages/opencode/docs/examples/review), [Kilo](https://github.com/lunchbox-labs/opencode-prompt-composer/tree/main/packages/kilo/docs/examples/review).
+- On-demand verification loads a checklist through a skill: [OpenCode](https://github.com/lunchbox-labs/opencode-prompt-composer/tree/main/packages/opencode/docs/examples/skill-guidance), [Kilo](https://github.com/lunchbox-labs/opencode-prompt-composer/tree/main/packages/kilo/docs/examples/skill-guidance).
 - [Migration](Migration) covers older Prompt Composer settings and optional Config Composer ordering.
