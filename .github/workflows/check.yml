@@ -43,10 +43,15 @@ jobs:
         id: dependencies
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: node_modules
+          # npm keeps the Kilo package's own @opentui copies in its node_modules. The
+          # workspace links stay out: Windows makes them junctions, and no check uses them.
+          path: |
+            node_modules
+            packages/*/node_modules
+            !node_modules/@lunchbox-labs
           # node-pty compiles from source on Linux, so the finished install restores far
           # faster than npm's download cache plus a fresh npm ci.
-          key: node-modules-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json') }}
+          key: node-modules-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'packages/*/package.json', 'package-lock.json') }}
       - name: Install dependencies
         if: steps.dependencies.outputs.cache-hit != 'true'
         run: npm ci
@@ -55,7 +60,10 @@ jobs:
         if: steps.dependencies.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: node_modules
+          path: |
+            node_modules
+            packages/*/node_modules
+            !node_modules/@lunchbox-labs
           key: ${{ steps.dependencies.outputs.cache-primary-key }}
       - name: Run the static checks
         # Typecheck, lint and formatting are platform-independent; Linux covers them.
@@ -89,12 +97,20 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        host: [opencode, kilo]
+        version: ["latest-compatible", "floor"]
         composition: [standalone, config-first]
-        opencode: ["latest-compatible", "floor"]
+        exclude:
+          # The config-only baseline is an OpenCode plugin, so Kilo runs standalone only.
+          - host: kilo
+            composition: config-first
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
-      OPENCODE_TEST_VERSION: ${{ matrix.opencode }}
+      NATIVE_HOST: ${{ matrix.host }}
+      # Each host reads only its own lane variable.
+      OPENCODE_TEST_VERSION: ${{ matrix.version }}
+      KILO_TEST_VERSION: ${{ matrix.version }}
       CONFIG_COMPOSER_REF: 34c4e8491cd33ff9f7952623882a98738c6e752d
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -116,8 +132,11 @@ jobs:
         id: dependencies
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: node_modules
-          key: node-modules-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json') }}
+          path: |
+            node_modules
+            packages/*/node_modules
+            !node_modules/@lunchbox-labs
+          key: node-modules-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'packages/*/package.json', 'package-lock.json') }}
       - name: Install dependencies
         if: steps.dependencies.outputs.cache-hit != 'true'
         run: npm ci
@@ -125,7 +144,10 @@ jobs:
         if: steps.dependencies.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: node_modules
+          path: |
+            node_modules
+            packages/*/node_modules
+            !node_modules/@lunchbox-labs
           key: ${{ steps.dependencies.outputs.cache-primary-key }}
       - name: Check out config-only compatibility baseline
         if: matrix.composition != 'standalone'

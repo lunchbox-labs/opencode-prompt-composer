@@ -1,62 +1,36 @@
 {
-  "name": "@lunchbox-labs/opencode-prompt-composer",
-  "version": "0.2.6",
-  "description": "Compose reusable prompt text in native OpenCode agents, commands and on-demand skills",
+  "name": "prompt-composer",
+  "private": true,
+  "description": "Workspace for the OpenCode and Kilo CLI Prompt Composer packages",
   "license": "MIT",
   "type": "module",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lunchbox-labs/opencode-prompt-composer.git"
   },
+  "workspaces": [
+    "packages/core",
+    "packages/opencode",
+    "packages/kilo"
+  ],
   "engines": {
     "node": ">=22.18.0"
   },
-  "exports": {
-    ".": {
-      "types": "./dist/server.d.ts",
-      "default": "./dist/server.js"
-    },
-    "./server": {
-      "types": "./dist/server.d.ts",
-      "default": "./dist/server.js"
-    },
-    "./includes": {
-      "types": "./dist/includes.d.ts",
-      "default": "./dist/includes.js"
-    },
-    "./tui": {
-      "types": "./dist/tui.d.ts",
-      "default": "./dist/tui.js"
-    }
-  },
-  "files": [
-    "dist",
-    "docs/examples",
-    "README.md",
-    "LICENSE"
-  ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json",
-    "test": "node --experimental-strip-types --test tests/*.test.ts tests/*.test.mjs",
+    "build": "npm run build --workspaces",
+    "typecheck": "npm run typecheck --workspaces && tsc -p tsconfig.json",
+    "test": "npm run test --workspaces --if-present && node --experimental-strip-types --test tests/*.test.ts tests/*.test.mjs",
     "lint": "eslint . --max-warnings 0",
-    "format": "prettier --write src tests scripts package.json tsconfig*.json *.config.mjs",
-    "format:check": "prettier --check src tests scripts package.json tsconfig*.json *.config.mjs",
+    "format": "prettier --write packages/*/src packages/*/tests tests scripts package.json packages/*/package.json tsconfig*.json packages/*/tsconfig*.json *.config.mjs",
+    "format:check": "prettier --check packages/*/src packages/*/tests tests scripts package.json packages/*/package.json tsconfig*.json packages/*/tsconfig*.json *.config.mjs",
     "check": "npm run check:static && npm test",
-    "prepack": "npm run build",
     "test:package": "npm run build && node --experimental-strip-types --test tests/package.integration.ts",
     "test:native": "npm run build && node --experimental-strip-types --test tests/native.integration.ts",
-    "check:static": "concurrently --names typecheck,lint,format --kill-others-on-fail \"npm run typecheck\" \"npm run lint\" \"npm run format:check\"",
-    "prebuild": "node --input-type=module -e \"import { rm } from 'node:fs/promises'; await rm('dist', { recursive: true, force: true });\""
+    "check:static": "concurrently --names typecheck,lint,format --kill-others-on-fail \"npm run typecheck\" \"npm run lint\" \"npm run format:check\""
   },
   "devDependencies": {
     "@eslint-community/eslint-plugin-eslint-comments": "4.8.1",
     "@eslint/js": "10.0.1",
-    "@opencode-ai/plugin": "1.19.5",
-    "@opencode-ai/sdk": "1.19.5",
-    "@opentui/core": "0.4.5",
-    "@opentui/keymap": "0.4.5",
-    "@opentui/solid": "0.4.5",
     "@types/node": "24.19.1",
     "@xterm/headless": "6.0.0",
     "concurrently": "10.0.6",
@@ -67,13 +41,8 @@
     "node-pty": "1.1.0",
     "prettier": "3.9.9",
     "semver": "7.8.5",
-    "solid-js": "1.9.12",
     "typescript": "6.0.3",
     "typescript-eslint": "8.71.0",
     "yaml": "2.9.1"
-  },
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org"
   }
 }

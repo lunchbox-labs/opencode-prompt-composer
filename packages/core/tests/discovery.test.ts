@@ -1,0 +1,689 @@
+import assert from "node:assert/strict";
+import fs, { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
+import { tmpdir } from "node:os";
+import { basename, join, resolve, sep } from "node:path";
+import { type TestContext, test } from "node:test";
+import { discoverPrompts, discoveryDirectories } from "../src/discovery.ts";
+import { opencode } from "../src/host.ts";
+
+async function fixture(t: TestContext) {
+  const root = await mkdtemp(join(tmpdir(), "prompt-discovery-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  const global = join(root, "config/opencode");
+  const project = join(root, "project");
+  const nested = join(project, "child");
+  const custom = join(root, "custom");
+  const roots = [
+    global,
+    join(nested, ".opencode"),
+    join(project, ".opencode"),
+    join(home, ".opencode"),
+    custom,
+  ];
+  for (const dir of roots) {
+    await mkdir(join(dir, "prompts/review"), { recursive: true });
+    await writeFile(join(dir, "prompts/review/evidence.md"), dir);
+  }
+  const env = {
+    XDG_CONFIG_HOME: join(root, "config"),
+    OPENCODE_TEST_HOME: home,
+    OPENCODE_CONFIG_DIR: custom,
+  };
+  return { root, home, global, project, nested, custom, roots, env };
+}
+
+/** Records the realpath and stat calls discovery makes for each entry it looks up. */
+function traceLookups(t: TestContext) {
+  const trace = { paths: [] as string[], active: 0, peak: 0 };
+  for (const name of ["realpath", "stat"] as const) {
+    const original = fs[name] as (...args: unknown[]) => Promise<unknown>;
+    t.mock.method(fs, name, async (...args: unknown[]) => {
+      trace.paths.push(String(args[0]));
+      trace.peak = Math.max(trace.peak, ++trace.active);
+      try {
+        return await original(...args);
+      } finally {
+        trace.active--;
+      }
+    });
+  }
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  return trace;
+}
+
+test("mirrors pinned host root order and later relative-path overrides", async (t) => {
+  const f = await fixture(t);
+  for (const directory of f.roots.toReversed()) {
+    const result = await discoverPrompts(
+      { directory: f.nested, worktree: f.project, host: opencode },
+      f.env,
+    );
+    assert.deepEqual(result.directories, f.roots);
+    assert.deepEqual(result.files.get("review/evidence.md"), {
+      path: join(directory, "prompts/review/evidence.md"),
+      root: join(directory, "prompts"),
+      relativePath: "review/evidence.md",
+    });
+    await rm(join(directory, "prompts/review/evidence.md"));
+  }
+  const empty = await discoverPrompts(
+    { directory: f.nested, worktree: f.project, host: opencode },
+    f.env,
+  );
+  assert.equal(empty.files.size, 0);
+});
+
+test("project disable flag keeps global, home and custom discovery", async (t) => {
+  const f = await fixture(t);
+  // OpenCode 1.19.x's Flag.truthy accepts case-insensitive "true" and "1".
+  for (const value of ["1", "true", "TRUE", "True"]) {
+    const result = await discoverPrompts(
+      { directory: f.nested, worktree: f.project, host: opencode },
+      { ...f.env, OPENCODE_DISABLE_PROJECT_CONFIG: value },
+    );
+    assert.deepEqual(
+      result.directories,
+      [f.global, join(f.home, ".opencode"), f.custom],
+      `project discovery disabled by ${value}`,
+    );
+    assert.equal(
+      result.files.get("review/evidence.md")?.path,
+      join(f.custom, "prompts/review/evidence.md"),
+    );
+  }
+});
+
+test("deduplicates repeated roots and respects worktree traversal boundary", async (t) => {
+  const f = await fixture(t);
+  await mkdir(join(f.root, ".opencode/prompts"), { recursive: true });
+  await writeFile(join(f.root, ".opencode/prompts/outside.md"), "outside");
+  const result = await discoverPrompts(
+    { directory: f.nested, worktree: f.project, host: opencode },
+    { ...f.env, OPENCODE_CONFIG_DIR: f.global },
+  );
+  assert.deepEqual(result.directories, f.roots.slice(0, -1));
+  assert.equal(result.files.has("outside.md"), false);
+  assert.equal(
+    result.files.get("review/evidence.md")?.path,
+    join(f.home, ".opencode/prompts/review/evidence.md"),
+  );
+});
+
+test("keeps non-regular prompt names only where no root has a regular file", async (t) => {
+  const f = await fixture(t);
+  await rm(join(f.custom, "prompts/review/evidence.md"));
+  await mkdir(join(f.custom, "prompts/review/evidence.md"));
+  await mkdir(join(f.global, "prompts/personal/review.md"), {
+    recursive: true,
+  });
+  const result = await discoverPrompts(
+    { directory: f.nested, worktree: f.project, host: opencode },
+    f.env,
+  );
+  assert.equal(
+    result.files.get("review/evidence.md")?.path,
+    join(f.home, ".opencode/prompts/review/evidence.md"),
+    "a later directory named like a prompt does not shadow an earlier file",
+  );
+  assert.equal(
+    result.files.get("personal/review.md")?.path,
+    join(f.global, "prompts/personal/review.md"),
+  );
+});
+
+test("preserves nested relative names, ignores unsupported/hidden files, rejects escaping symlinks", async (t) => {
+  const f = await fixture(t);
+  await writeFile(join(f.global, "prompts/review/evidence.txt"), "Text");
+  await writeFile(join(f.global, "prompts/.hidden.md"), "Hidden");
+  await writeFile(join(f.global, "prompts/data.json"), "{}");
+  const result = await discoverPrompts(
+    { directory: f.nested, worktree: f.project, host: opencode },
+    f.env,
+  );
+  assert.equal(result.files.has("review/evidence.txt"), true);
+  assert.equal(result.files.has(".hidden.md"), false);
+  assert.equal(result.files.has("data.json"), false);
+  await writeFile(join(f.root, "secret.md"), "secret");
+  try {
+    await symlink(join(f.root, "secret.md"), join(f.custom, "prompts/leak.md"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") {
+      t.skip("Symlink privilege unavailable");
+      return;
+    }
+    throw error;
+  }
+  await assert.rejects(
+    discoverPrompts(
+      { directory: f.nested, worktree: f.project, host: opencode },
+      f.env,
+    ),
+    /escapes/,
+  );
+});
+
+test("reports the first failing entry in sorted order", async (t) => {
+  const f = await fixture(t);
+  const prompts = join(f.global, "prompts");
+  await writeFile(join(f.root, "secret.md"), "secret");
+  try {
+    await symlink(join(f.root, "secret.md"), join(prompts, "z.md"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") {
+      t.skip("Symlink privilege unavailable");
+      return;
+    }
+    throw error;
+  }
+  const discover = () =>
+    discoverPrompts(
+      { directory: f.nested, worktree: f.project, host: opencode },
+      f.env,
+    );
+  await mkdir(join(prompts, "a", ...Array<string>(32).fill("d")), {
+    recursive: true,
+  });
+  await assert.rejects(discover(), /cycle or depth limit/);
+  await rm(join(prompts, "a"), { recursive: true });
+  await mkdir(join(prompts, "a"));
+  await mkdir(join(prompts, ".private"));
+  await writeFile(join(prompts, ".private/body.md"), "Private");
+  await symlink(join(prompts, ".private/body.md"), join(prompts, "a/body.md"));
+  await assert.rejects(discover(), /hidden path/);
+  await rm(join(prompts, "a"), { recursive: true });
+  await assert.rejects(discover(), /escapes/);
+});
+
+test("allows exactly 4096 entries and reports the limit before later failures", async (t) => {
+  const f = await fixture(t);
+  const empty = join(f.root, "empty");
+  const prompts = join(f.root, "limit/prompts");
+  const many = join(prompts, "many");
+  await mkdir(many, { recursive: true });
+  const env = {
+    XDG_CONFIG_HOME: join(f.root, "unused"),
+    OPENCODE_TEST_HOME: empty,
+    OPENCODE_CONFIG_DIR: join(f.root, "limit"),
+    OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+  };
+  const discover = () =>
+    discoverPrompts({ directory: empty, worktree: empty, host: opencode }, env);
+  const name = (index: number) => `${String(index).padStart(4, "0")}.md`;
+  const discoveryEntryLimit = 4096;
+  const entriesUsedByManyDirectoryItself = 1;
+  const promptFilesAtEntryLimit =
+    discoveryEntryLimit - entriesUsedByManyDirectoryItself;
+  const fileWriteBatchSize = 512;
+  const entryLimitError = new RegExp(`exceeds ${discoveryEntryLimit} entries`);
+  for (
+    let start = 0;
+    start < promptFilesAtEntryLimit;
+    start += fileWriteBatchSize
+  ) {
+    await Promise.all(
+      Array.from(
+        {
+          length: Math.min(fileWriteBatchSize, promptFilesAtEntryLimit - start),
+        },
+        (_, offset) => writeFile(join(many, name(start + offset)), "Snippet"),
+      ),
+    );
+  }
+  const result = await discover();
+  assert.equal(result.files.size, promptFilesAtEntryLimit);
+  assert.equal(
+    result.files.has(`many/${name(promptFilesAtEntryLimit - 1)}`),
+    true,
+  );
+  // The limit falls inside a lookup batch.
+  const past = Array.from({ length: 4 }, (_, offset) =>
+    name(promptFilesAtEntryLimit + offset),
+  );
+  for (const file of past) {
+    await writeFile(join(many, file), "Snippet");
+  }
+  const trace = traceLookups(t);
+  await assert.rejects(discover(), entryLimitError);
+  assert.deepEqual(
+    trace.paths.filter((path) => past.includes(basename(path))),
+    [],
+    "the batch's entries past the limit are never resolved",
+  );
+  for (const file of past) {
+    await rm(join(many, file));
+  }
+  await writeFile(join(f.root, "secret.md"), "secret");
+  try {
+    await symlink(join(f.root, "secret.md"), join(prompts, "z.md"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") {
+      t.skip("Symlink privilege unavailable");
+      return;
+    }
+    throw error;
+  }
+  await assert.rejects(discover(), entryLimitError);
+});
+
+test("discovery overlaps a bounded number of path lookups", async (t) => {
+  const f = await fixture(t);
+  const prompts = join(f.global, "prompts");
+  for (let index = 0; index < 100; index++) {
+    await mkdir(join(prompts, `area-${index % 4}`), { recursive: true });
+    await writeFile(join(prompts, `area-${index % 4}`, `${index}.md`), "Text");
+  }
+  const trace = traceLookups(t);
+  const result = await discoverPrompts(
+    { directory: f.nested, worktree: f.project, host: opencode },
+    f.env,
+  );
+  assert.equal(result.files.has("area-3/99.md"), true);
+  assert.ok(trace.peak > 1, "path lookups ran one at a time");
+  assert.ok(trace.peak <= 16, `${trace.peak} path lookups were in flight`);
+});
+
+test(
+  "rejects a directory symlink loop",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const f = await fixture(t);
+    const review = join(f.global, "prompts/review");
+    await symlink(review, join(review, "loop"));
+    await assert.rejects(
+      discoverPrompts(
+        { directory: f.nested, worktree: f.project, host: opencode },
+        f.env,
+      ),
+      /cycle or depth limit/,
+    );
+  },
+);
+
+async function createSymlinkOrSkip(
+  t: TestContext,
+  target: string,
+  path: string,
+): Promise<boolean> {
+  try {
+    await symlink(target, path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") {
+      t.skip("Symlink privilege unavailable");
+      return false;
+    }
+    throw error;
+  }
+}
+
+// Self-referencing symlinks are POSIX-only fixtures; Windows may not report ELOOP.
+const loops = process.platform !== "win32";
+
+test("keeps broken prompt-name symlinks as invalid entries and ignores other broken links", async (t) => {
+  const f = await fixture(t);
+  const prompts = join(f.global, "prompts");
+  const missing = join(f.root, "missing.md");
+  await writeFile(join(f.root, "plain.md"), "plain");
+  if (
+    !(await createSymlinkOrSkip(
+      t,
+      missing,
+      join(prompts, "review/dangling.md"),
+    ))
+  ) {
+    return;
+  }
+  await createSymlinkOrSkip(
+    t,
+    join(f.root, "plain.md", "x.md"),
+    join(prompts, "through.md"),
+  );
+  await createSymlinkOrSkip(t, missing, join(prompts, "notes.json"));
+  await createSymlinkOrSkip(
+    t,
+    join(f.root, "missing-dir"),
+    join(prompts, "area"),
+  );
+  if (loops) {
+    await createSymlinkOrSkip(
+      t,
+      join(prompts, "loop.TXT"),
+      join(prompts, "loop.TXT"),
+    );
+  }
+  await rm(join(f.custom, "prompts/review/evidence.md"));
+  await createSymlinkOrSkip(
+    t,
+    missing,
+    join(f.custom, "prompts/review/evidence.md"),
+  );
+  const result = await discoverPrompts(
+    { directory: f.nested, worktree: f.project, host: opencode },
+    f.env,
+  );
+  assert.deepEqual(result.files.get("review/dangling.md"), {
+    path: join(prompts, "review/dangling.md"),
+    root: prompts,
+    relativePath: "review/dangling.md",
+  });
+  assert.equal(
+    result.files.get("through.md")?.path,
+    join(prompts, "through.md"),
+  );
+  if (loops) {
+    assert.equal(result.files.get("loop.TXT")?.path, join(prompts, "loop.TXT"));
+  }
+  assert.equal(result.files.has("notes.json"), false);
+  assert.equal(result.files.has("area"), false);
+  assert.equal(
+    result.files.get("review/evidence.md")?.path,
+    join(f.home, ".opencode/prompts/review/evidence.md"),
+    "a later broken link does not shadow an earlier regular file",
+  );
+});
+
+test("skips broken prompts roots like absent ones", async (t) => {
+  const f = await fixture(t);
+  const dangling = join(f.project, ".opencode/prompts");
+  const looping = join(f.home, ".opencode/prompts");
+  await rm(dangling, { recursive: true });
+  if (!(await createSymlinkOrSkip(t, join(f.root, "missing"), dangling))) {
+    return;
+  }
+  if (loops) {
+    await rm(looping, { recursive: true });
+    await createSymlinkOrSkip(t, looping, looping);
+  }
+  const result = await discoverPrompts(
+    { directory: f.nested, worktree: f.project, host: opencode },
+    f.env,
+  );
+  assert.deepEqual(result.directories, f.roots);
+  assert.equal(
+    result.files.get("review/evidence.md")?.path,
+    join(f.custom, "prompts/review/evidence.md"),
+  );
+});
+
+test("reports a prompt entry removed during discovery as a discovery change", async (t) => {
+  const f = await fixture(t);
+  const entry = join(f.global, "prompts/review/evidence.md");
+  const original = fs.realpath;
+  t.mock.method(fs, "realpath", async (path: string) => {
+    if (path === entry) {
+      await rm(entry);
+    }
+    return original(path);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  await assert.rejects(
+    discoverPrompts(
+      { directory: f.nested, worktree: f.project, host: opencode },
+      f.env,
+    ),
+    { message: `Prompt discovery changed: ${entry}. Retry composition.` },
+  );
+});
+
+test("discovery resolves a bounded number of entries at a time and stops at the entry limit", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "prompt-discovery-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const project = join(root, "project");
+  const prompts = join(project, ".opencode/prompts");
+  // Each enclosing directory lists its subdirectory first, ahead of many
+  // files, and the innermost directory alone exceeds the entry limit.
+  const middle = join(prompts, "0");
+  const inner = join(middle, "0");
+  await mkdir(inner, { recursive: true });
+  const files = [
+    ...[prompts, middle].flatMap((directory) =>
+      Array.from({ length: 100 }, (_, index) =>
+        join(directory, `${index + 1}.md`),
+      ),
+    ),
+    ...Array.from({ length: 4100 }, (_, index) => join(inner, `${index}.md`)),
+  ];
+  for (let index = 0; index < files.length; index += 256) {
+    await Promise.all(
+      files.slice(index, index + 256).map((file) => writeFile(file, "prompt")),
+    );
+  }
+  const trace = traceLookups(t);
+  await assert.rejects(
+    discoverPrompts(
+      { directory: project, worktree: project, host: opencode },
+      {
+        XDG_CONFIG_HOME: join(root, "config"),
+        OPENCODE_TEST_HOME: join(root, "home"),
+      },
+    ),
+    /exceeds 4096 entries/,
+  );
+  assert.ok(trace.peak <= 16, `peak ${trace.peak}`);
+  const looked = new Set(
+    trace.paths.filter((path) => path.startsWith(prompts + sep)),
+  );
+  // Past the limit, each enclosing directory has looked up only the rest of
+  // the batch that held its subdirectory.
+  assert.ok(
+    looked.size <= 4096 + 2 * (16 - 1),
+    `looked up ${looked.size} entries`,
+  );
+});
+
+test("checks ancestor roots together, keeping root order and the first failure in path order", async (t) => {
+  // Build the paths from the platform's filesystem root so they match what
+  // discovery resolves on Windows as well as on POSIX.
+  const root = resolve("/");
+  const environment = {
+    XDG_CONFIG_HOME: join(root, "config"),
+    OPENCODE_TEST_HOME: join(root, "home"),
+  };
+  const context = {
+    directory: join(root, "work", "a", "b"),
+    worktree: join(root, "work"),
+    host: opencode,
+  };
+  const missing = join(root, "work", "a", ".opencode");
+  const nearest = join(root, "work", "a", "b", ".opencode");
+  const started: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const sequential = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("root checks ran one at a time")),
+      500,
+    );
+  });
+  t.after(() => clearTimeout(timer));
+  sequential.catch(() => undefined);
+  // Every check starts before any completes; later roots answer first.
+  const present = async (path: string): Promise<boolean> => {
+    started.push(path);
+    if (started.length === 4) {
+      release();
+    }
+    await Promise.race([gate, sequential]);
+    await new Promise((resolve) =>
+      setTimeout(resolve, 10 - started.indexOf(path)),
+    );
+    return path !== missing;
+  };
+  assert.deepEqual(await discoveryDirectories(context, environment, present), [
+    join(root, "config", "opencode"),
+    nearest,
+    join(root, "work", ".opencode"),
+    join(root, "home", ".opencode"),
+  ]);
+
+  const failing = async (path: string): Promise<boolean> => {
+    // The later root fails first; the earlier root's failure is still reported.
+    await new Promise((resolve) =>
+      setTimeout(resolve, path === nearest ? 20 : 0),
+    );
+    if (path === nearest || path === join(root, "home", ".opencode")) {
+      throw new Error(`denied ${path}`);
+    }
+    return true;
+  };
+  await assert.rejects(
+    discoveryDirectories(context, environment, failing),
+    (error) => error instanceof Error && error.message === `denied ${nearest}`,
+  );
+});
+
+test("reports the ancestor limit only after every checked ancestor succeeds", async () => {
+  const environment = {
+    XDG_CONFIG_HOME: "/config",
+    OPENCODE_TEST_HOME: "/home",
+  };
+  const directory = `/${Array.from({ length: 300 }, (_, index) => `d${index}`).join("/")}`;
+  const context = { directory, worktree: "/", host: opencode };
+  const checked: string[] = [];
+  const present = (path: string): Promise<boolean> => {
+    checked.push(path);
+    return Promise.resolve(true);
+  };
+  await assert.rejects(
+    discoveryDirectories(context, environment, present),
+    /ancestor-directory limit/,
+  );
+  assert.equal(checked.length, 256);
+  assert.ok(!checked.includes(join("/home", ".opencode")));
+
+  const last = checked[255];
+  const failing = (path: string): Promise<boolean> =>
+    path === last
+      ? Promise.reject(new Error(`denied ${path}`))
+      : Promise.resolve(true);
+  await assert.rejects(
+    discoveryDirectories(context, environment, failing),
+    (error) => error instanceof Error && error.message === `denied ${last}`,
+  );
+});
+
+test("lenient discovery leaves out unusable entries and keeps the rest", async (t) => {
+  const f = await fixture(t);
+  const prompts = join(f.global, "prompts");
+  await writeFile(join(f.root, "secret.md"), "secret");
+  await mkdir(join(prompts, ".private"));
+  await writeFile(join(prompts, ".private/body.md"), "Private");
+  await mkdir(join(prompts, "deep", ...Array<string>(32).fill("d")), {
+    recursive: true,
+  });
+  await writeFile(join(prompts, "keep.md"), "Keep");
+  try {
+    await symlink(join(f.root, "secret.md"), join(prompts, "leak.md"));
+    await symlink(
+      join(prompts, ".private/body.md"),
+      join(prompts, "hidden.md"),
+    );
+    await symlink(prompts, join(prompts, "loop"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") {
+      t.skip("Symlink privilege unavailable");
+      return;
+    }
+    throw error;
+  }
+  const warnings: string[] = [];
+  const result = await discoverPrompts(
+    { directory: f.nested, worktree: f.project, host: opencode },
+    f.env,
+    (warning) => warnings.push(warning),
+  );
+  assert.equal(result.files.has("keep.md"), true);
+  assert.equal(result.files.has("review/evidence.md"), true);
+  for (const name of ["leak.md", "hidden.md"]) {
+    assert.equal(result.files.has(name), false, `${name} is left out`);
+  }
+  assert.equal(
+    [...result.files.keys()].some((name) => name.startsWith("loop/")),
+    false,
+  );
+  assert.deepEqual(warnings, [
+    `Ignored ${join(prompts, "deep", ...Array<string>(31).fill("d"))}: it exceeds the directory nesting limit.`,
+    `Ignored ${join(prompts, "hidden.md")}: it resolves to a hidden path.`,
+    `Ignored ${join(prompts, "leak.md")}: it links outside its prompts directory.`,
+  ]);
+});
+
+test("lenient discovery treats a prompts file as absent and reports unreadable directories", async (t) => {
+  const f = await fixture(t);
+  await rm(join(f.custom, "prompts"), { recursive: true });
+  await writeFile(join(f.custom, "prompts"), "not a directory");
+  const unreadable = join(f.global, "prompts/review");
+  const readdir = fs.readdir;
+  t.mock.method(fs, "readdir", async (...args: Parameters<typeof readdir>) => {
+    if (args[0] === unreadable) {
+      throw Object.assign(new Error("denied"), { code: "EACCES" });
+    }
+    return readdir(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  const warnings: string[] = [];
+  const result = await discoverPrompts(
+    { directory: f.nested, worktree: f.project, host: opencode },
+    f.env,
+    (warning) => warnings.push(warning),
+  );
+  assert.equal(
+    result.files.get("review/evidence.md")?.root,
+    join(f.home, ".opencode/prompts"),
+    "the last readable root still wins",
+  );
+  assert.deepEqual(warnings, [
+    `Ignored ${unreadable}: it could not be read (EACCES).`,
+  ]);
+});
+
+test("lenient discovery stops at the entry limit with what it found", async (t) => {
+  const f = await fixture(t);
+  const empty = join(f.root, "empty");
+  const many = join(f.root, "limit/prompts/many");
+  await mkdir(many, { recursive: true });
+  const env = {
+    XDG_CONFIG_HOME: join(f.root, "unused"),
+    OPENCODE_TEST_HOME: empty,
+    OPENCODE_CONFIG_DIR: join(f.root, "limit"),
+    OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+  };
+  const files = 4100;
+  for (let start = 0; start < files; start += 512) {
+    await Promise.all(
+      Array.from({ length: Math.min(512, files - start) }, (_, offset) =>
+        writeFile(
+          join(many, `${String(start + offset).padStart(4, "0")}.md`),
+          "Snippet",
+        ),
+      ),
+    );
+  }
+  const warnings: string[] = [];
+  const result = await discoverPrompts(
+    { directory: empty, worktree: empty, host: opencode },
+    env,
+    (warning) => warnings.push(warning),
+  );
+  assert.equal(result.files.size, 4095);
+  assert.equal(result.files.has("many/4094.md"), true);
+  assert.equal(result.files.has("many/4095.md"), false);
+  assert.deepEqual(warnings, [
+    "The prompts directories have more than 4096 entries; later entries were ignored.",
+  ]);
+});

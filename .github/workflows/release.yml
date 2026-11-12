@@ -1,8 +1,9 @@
 name: Release
-# Run by hand on main. The run releases the version in package.json: it
-# refuses a version that already has a tag or an npm release, runs Check on
-# the release commit, publishes the verified tarball to npm, then creates the
-# v<version> tag and a published GitHub release with the tarball attached.
+# Run by hand on main. The run releases the version that packages/core,
+# packages/opencode and packages/kilo share: it refuses a version that already
+# has a tag or any of the three on npm, runs Check on the release commit,
+# publishes the verified tarballs to npm (core first), then creates the
+# v<version> tag and a published GitHub release with the tarballs attached.
 on:
   workflow_dispatch:
     inputs:
@@ -62,16 +63,22 @@ jobs:
           PRERELEASE: ${{ inputs.prerelease }}
           RELEASE_COMMIT: ${{ github.sha }}
         run: |
-          version="$(jq -r .version package.json)"
+          # The three packages release together, so they must share one version.
+          versions="$(jq -r .version packages/core/package.json packages/opencode/package.json packages/kilo/package.json | sort -u)"
+          if [ "$(wc -l <<<"$versions")" -ne 1 ]; then
+            echo "::error::packages/core, packages/opencode and packages/kilo must hold the same version."
+            exit 1
+          fi
+          version="$versions"
           core='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
           if [ "$PRERELEASE" = true ]; then
             if [[ ! "$version" =~ ^$core-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*$ ]]; then
-              echo "::error::A pre-release needs a pre-release version in package.json, such as 1.2.3-beta.1."
+              echo "::error::A pre-release needs a pre-release version in the package manifests, such as 1.2.3-beta.1."
               exit 1
             fi
             kind=pre-release
           elif [[ ! "$version" =~ ^$core$ ]]; then
-            echo "::error::package.json must hold a stable version such as 1.2.3. To publish a pre-release version, run Release with prerelease set."
+            echo "::error::The package manifests must hold a stable version such as 1.2.3. To publish a pre-release version, run Release with prerelease set."
             exit 1
           else
             kind=release
@@ -98,7 +105,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       access: ${{ steps.release.outputs.access }}
-      name: ${{ steps.release.outputs.name }}
+      packages: ${{ steps.release.outputs.packages }}
       tag: ${{ needs.version.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
     steps:
@@ -122,38 +129,40 @@ jobs:
         run: node scripts/validate-release.mjs
       - name: Refuse a version that is already released
         env:
-          NPM_PACKAGE: ${{ steps.release.outputs.name }}
+          NPM_PACKAGES: ${{ steps.release.outputs.packages }}
           NPM_VERSION: ${{ steps.release.outputs.version }}
           RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: |
           status=0
           git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" > /dev/null || status=$?
           if [ "$status" -eq 0 ]; then
-            echo "::error::Tag $RELEASE_TAG already exists. To finish an earlier run of this version, re-run only its failed jobs. Otherwise bump the version in package.json, merge it to main and run Release again."
+            echo "::error::Tag $RELEASE_TAG already exists. To finish an earlier run of this version, re-run only its failed jobs. Otherwise bump the version in the package manifests, merge it to main and run Release again."
             exit 1
           elif [ "$status" -ne 2 ]; then
             echo "::error::Could not check whether tag $RELEASE_TAG exists."
             exit 1
           fi
-          if published="$(npm view "$NPM_PACKAGE@$NPM_VERSION" version 2>"$RUNNER_TEMP/npm-view.log")"; then
-            if [ -n "$published" ]; then
-              echo "::error::$NPM_PACKAGE@$NPM_VERSION is already on npm. To finish an earlier run of this version, re-run only its failed jobs. Otherwise bump the version in package.json, merge it to main and run Release again."
+          for package in $NPM_PACKAGES; do
+            if published="$(npm view "$package@$NPM_VERSION" version 2>"$RUNNER_TEMP/npm-view.log")"; then
+              if [ -n "$published" ]; then
+                echo "::error::$package@$NPM_VERSION is already on npm. To finish an earlier run of this version, re-run only its failed jobs. Otherwise bump the version in the package manifests, merge it to main and run Release again."
+                exit 1
+              fi
+            elif ! grep -q "code E404" "$RUNNER_TEMP/npm-view.log"; then
+              cat "$RUNNER_TEMP/npm-view.log" >&2
               exit 1
             fi
-          elif ! grep -q "code E404" "$RUNNER_TEMP/npm-view.log"; then
-            cat "$RUNNER_TEMP/npm-view.log" >&2
-            exit 1
-          fi
+          done
       - name: Install dependencies
         run: npm ci
-      # Builds dist/ for the tarball and tests the packed package. The full
+      # Builds each package's dist/ and tests the packed packages. The full
       # checks run in the Check job against the same commit.
       - name: Run package tests
         run: npm run test:package
       - name: Pack the verified build
         run: |
           mkdir release
-          npm pack --ignore-scripts --pack-destination release
+          npm pack --workspaces --ignore-scripts --pack-destination release
           cd release
           sha256sum ./*.tgz > SHA256SUMS
       - name: Upload verified package
@@ -199,37 +208,46 @@ jobs:
           package-manager-cache: false
       - name: Use a trusted-publishing-capable npm version
         run: npm install --global npm@11.9.0 --ignore-scripts --no-audit --no-fund
-      - name: Publish the verified tarball with OIDC
+      - name: Publish the verified tarballs with OIDC
         working-directory: release
         env:
           NPM_ACCESS: ${{ needs.verify.outputs.access }}
-          NPM_PACKAGE: ${{ needs.verify.outputs.name }}
+          # In publication order: core first, which both adapters depend on.
+          NPM_PACKAGES: ${{ needs.verify.outputs.packages }}
           NPM_TAG: ${{ inputs.prerelease && 'next' || 'latest' }}
           NPM_VERSION: ${{ needs.verify.outputs.version }}
-          # This repository and npm package are public.
+          # This repository and its npm packages are public.
           NPM_CONFIG_PROVENANCE: "true"
-        # Re-running this job after a successful publication skips npm when the
-        # registry already holds this exact tarball, and stops when it holds
-        # another one.
+        # Re-running this job after a partial or successful publication skips
+        # each package npm already holds with this exact tarball, and stops at
+        # one it holds with another.
         run: |
           sha256sum --check SHA256SUMS
-          tarball="sha512-$(openssl dgst -sha512 -binary ./*.tgz | base64 -w0)"
-          if published="$(npm view "$NPM_PACKAGE@$NPM_VERSION" dist.integrity 2>"$RUNNER_TEMP/npm-view.log")"; then
-            :
-          elif grep -q "code E404" "$RUNNER_TEMP/npm-view.log"; then
-            published=""
-          else
-            cat "$RUNNER_TEMP/npm-view.log" >&2
-            exit 1
-          fi
-          if [ -z "$published" ]; then
-            npm publish ./*.tgz --ignore-scripts --access "$NPM_ACCESS" --tag "$NPM_TAG"
-          elif [ "$published" = "$tarball" ]; then
-            echo "$NPM_PACKAGE@$NPM_VERSION is already on npm with this tarball; skipping npm publish."
-          else
-            echo "::error::$NPM_PACKAGE@$NPM_VERSION is already on npm with a different tarball. Re-run only the failed jobs so the verified package is reused."
-            exit 1
-          fi
+          for package in $NPM_PACKAGES; do
+            # npm pack names @scope/name as scope-name-<version>.tgz.
+            file="./$(tr -d @ <<<"$package" | tr / -)-$NPM_VERSION.tgz"
+            if [ ! -f "$file" ]; then
+              echo "::error::The verified build has no tarball for $package@$NPM_VERSION."
+              exit 1
+            fi
+            tarball="sha512-$(openssl dgst -sha512 -binary "$file" | base64 -w0)"
+            if published="$(npm view "$package@$NPM_VERSION" dist.integrity 2>"$RUNNER_TEMP/npm-view.log")"; then
+              :
+            elif grep -q "code E404" "$RUNNER_TEMP/npm-view.log"; then
+              published=""
+            else
+              cat "$RUNNER_TEMP/npm-view.log" >&2
+              exit 1
+            fi
+            if [ -z "$published" ]; then
+              npm publish "$file" --ignore-scripts --access "$NPM_ACCESS" --tag "$NPM_TAG"
+            elif [ "$published" = "$tarball" ]; then
+              echo "$package@$NPM_VERSION is already on npm with this tarball; skipping npm publish."
+            else
+              echo "::error::$package@$NPM_VERSION is already on npm with a different tarball. Re-run only the failed jobs so the verified packages are reused."
+              exit 1
+            fi
+          done
 
   release:
     name: GitHub release
@@ -256,11 +274,10 @@ jobs:
           RELEASE_TAG: ${{ needs.verify.outputs.tag }}
         # Re-running this job finishes an earlier attempt: it accepts the tag
         # only on the release commit, publishes a draft left for the tag with
-        # the package attached, and leaves a published release as it is.
+        # the packages attached, and leaves a published release as it is.
         # The step records the release's page as its url output for the summary.
         run: |
           sha256sum --check SHA256SUMS
-          package="$(basename ./*.tgz)"
           if tagged="$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.sha' 2>"$RUNNER_TEMP/tag.log")"; then
             if [ "$tagged" != "$RELEASE_COMMIT" ]; then
               echo "::error::Tag $RELEASE_TAG points at $tagged, not the release commit $RELEASE_COMMIT."
@@ -277,10 +294,13 @@ jobs:
           attached=true
           if [ -n "$published_url" ]; then
             assets="$(awk -F '\t' '$1 == "false" { print $3; exit }' <<<"$releases")"
-            if [[ " $assets " != *" $package "* ]]; then
-              echo "::warning::The $RELEASE_TAG release is already published without $package, so the package could not be attached."
-              attached=false
-            fi
+            for file in ./*.tgz; do
+              package="$(basename "$file")"
+              if [[ " $assets " != *" $package "* ]]; then
+                echo "::warning::The $RELEASE_TAG release is already published without $package, so the package could not be attached."
+                attached=false
+              fi
+            done
             url="$published_url"
           else
             if [ -n "$draft_url" ]; then
@@ -308,8 +328,8 @@ jobs:
             echo "### Released $RELEASE_TAG"
             echo
             if [ "$RELEASE_ATTACHED" = true ]; then
-              echo "[The $RELEASE_TAG release]($RELEASE_URL) is published with the package attached."
+              echo "[The $RELEASE_TAG release]($RELEASE_URL) is published with the packages attached."
             else
-              echo "[The $RELEASE_TAG release]($RELEASE_URL) was already published without the package, so it was not attached."
+              echo "[The $RELEASE_TAG release]($RELEASE_URL) was already published without every package, so the missing ones were not attached."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
