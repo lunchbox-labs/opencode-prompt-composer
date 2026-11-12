@@ -19,7 +19,7 @@ import {
   exerciseConfigEditor,
   exercisePromptViewer,
 } from "./native-editors.ts";
-import { corePackage, nativeHost } from "./hosts.ts";
+import { nativeHost } from "./hosts.ts";
 import { resolveNativeVersion, verifyNativeVersion } from "./native-host.ts";
 import { exerciseNativeTerminal, viewerCommands } from "./native-terminal.ts";
 import { prepareRipgrep } from "./native-ripgrep.ts";
@@ -151,15 +151,13 @@ test(
     ).stdout.trim();
     verifyNativeVersion(product, version, range, actual);
     await prepareRipgrep(root, env, t.signal);
-    // The adapter depends on core at the same version, so both are packed and
-    // served; npm packs workspaces in their declared order, core first.
+    // Core is bundled into the package, so the package is packed and served
+    // alone.
     const packed = await execute(
       process.execPath,
       [
         npm,
         "pack",
-        "--workspace",
-        corePackage.workspace,
         "--workspace",
         host.workspace,
         "--ignore-scripts",
@@ -169,7 +167,7 @@ test(
       ],
       { cwd: resolve("."), env: installEnv, timeout: 60_000, signal: t.signal },
     );
-    const [coreTarball, pluginTarball] = (
+    const [pluginTarball] = (
       JSON.parse(packed.stdout) as { name: string; filename: string }[]
     ).map(({ filename }) => join(root, filename));
     const install = join(root, "installed");
@@ -183,7 +181,6 @@ test(
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
-        coreTarball,
         pluginTarball,
       ],
       { env: installEnv, timeout: 120_000, signal: t.signal },
@@ -267,22 +264,17 @@ test(
     );
     const obsoleteText = "{ malformed obsolete policy: ignored";
     await writeFile(obsoletePath, obsoleteText);
-    // Serve both packed packages under their real npm identities.
+    // Serve the packed package under its real npm identity.
     const served = await Promise.all(
-      [
-        { file: pluginTarball, directory: plugin, path: "/plugin.tgz" },
-        {
-          file: coreTarball,
-          directory: join(install, "node_modules", corePackage.packageName),
-          path: "/core.tgz",
-        },
-      ].map(async ({ file, directory, path }) => ({
-        path,
-        tarball: await readFile(file),
-        manifest: JSON.parse(
-          await readFile(join(directory, "package.json"), "utf8"),
-        ) as { name: string; version: string },
-      })),
+      [{ file: pluginTarball, directory: plugin, path: "/plugin.tgz" }].map(
+        async ({ file, directory, path }) => ({
+          path,
+          tarball: await readFile(file),
+          manifest: JSON.parse(
+            await readFile(join(directory, "package.json"), "utf8"),
+          ) as { name: string; version: string },
+        }),
+      ),
     );
     const [{ manifest }] = served;
     let registry = "";

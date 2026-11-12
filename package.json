@@ -17,7 +17,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "npm run build --workspaces",
+    "build": "npm run build --workspace packages/opencode --workspace packages/kilo",
     "typecheck": "npm run typecheck --workspaces && tsc -p tsconfig.json",
     "test": "npm run test --workspaces --if-present && node --experimental-strip-types --test tests/*.test.ts tests/*.test.mjs",
     "lint": "eslint . --max-warnings 0",
@@ -41,6 +41,7 @@
     "node-pty": "1.1.0",
     "prettier": "3.9.9",
     "semver": "7.8.5",
+    "tsdown": "^0.23.7",
     "typescript": "6.0.3",
     "typescript-eslint": "8.71.0",
     "yaml": "2.9.1"

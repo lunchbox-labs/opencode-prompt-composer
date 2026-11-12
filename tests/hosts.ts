@@ -30,6 +30,7 @@ export interface TestHost {
   extraConfig: Record<string, unknown>;
 }
 
+/** The private core that the build bundles into each host package. */
 export const corePackage = {
   workspace: "packages/core",
   packageName: "@lunchbox-labs/prompt-composer-core",

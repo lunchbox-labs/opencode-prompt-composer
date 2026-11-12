@@ -9,7 +9,8 @@ import { promisify } from "node:util";
 // installs the packed packages, each of which ships its README.md and LICENSE, and the
 // packed-package test in the ungated check job asserts the pack contents, so such a pull
 // request cannot pass Check while breaking a native job. The root README.md and LICENSE
-// are not packed. Every other path keeps the matrix: workflows, scripts, package
+// are not packed, and neither are those of the private packages/core, whose sources alone
+// the build bundles into each package. Every other path keeps the matrix: workflows, scripts, package
 // metadata, sources and the documented examples all feed at least one check that
 // exercises the installed packages. Wiki pages under docs/wiki/ are not packed and no
 // check reads them.

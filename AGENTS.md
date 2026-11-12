@@ -12,10 +12,10 @@ These documents must be read explicitly; GitHub does not automatically inherit t
 
 ## Layout
 
-This repository is an npm workspace with one lockfile and three packages released together at one version:
+This repository is an npm workspace with one lockfile and two published packages released together at one version:
 
-- `packages/core` (`@lunchbox-labs/prompt-composer-core`): discovery, include expansion, the server hooks, the prompt viewer and the host profiles in `src/host.ts`, with the unit tests. It has no runtime dependency on a host package.
-- `packages/opencode` (`@lunchbox-labs/opencode-prompt-composer`) and `packages/kilo` (`@lunchbox-labs/kilo-prompt-composer`): thin adapters that pass their host profile to the core and ship their host's examples in `docs/examples/`.
+- `packages/core` (`@lunchbox-labs/prompt-composer-core`, private): discovery, include expansion, the server hooks, the prompt viewer and the host profiles in `src/host.ts`, with the unit tests. It is never published and has no runtime dependency on a host package.
+- `packages/opencode` (`@lunchbox-labs/opencode-prompt-composer`) and `packages/kilo` (`@lunchbox-labs/kilo-prompt-composer`): thin adapters that pass their host profile to the core and ship their host's examples in `docs/examples/`. Their build bundles the core with tsdown (`tsdown.config.mjs` at the root), keeping every other import external, so they don't depend on it.
 
 Put host differences in the host profile as data rather than in branches. Root `tests/` holds the package, native, example, release and baseline tests, and `tests/hosts.ts` describes each host for them. Shared tooling and its configuration live at the root.
 

@@ -11,6 +11,12 @@ const manifest = JSON.parse(
     "utf8",
   ),
 );
+const core = JSON.parse(
+  await readFile(
+    new URL("../packages/core/package.json", import.meta.url),
+    "utf8",
+  ),
+);
 const entry = lock.packages["packages/kilo"];
 
 test("published Kilo package has no Kilo engine gate and retains the Node requirement", () => {
@@ -18,6 +24,20 @@ test("published Kilo package has no Kilo engine gate and retains the Node requir
   assert.equal(manifest.engines.node, ">=22.18.0");
   assert.equal(Object.hasOwn(entry.engines, "kilo"), false);
   assert.equal(entry.engines.node, manifest.engines.node);
+});
+
+test("published Kilo package bundles the private core instead of depending on it", () => {
+  assert.equal(core.private, true);
+  for (const field of [
+    "dependencies",
+    "optionalDependencies",
+    "peerDependencies",
+    "devDependencies",
+  ]) {
+    assert.equal(manifest[field]?.[core.name], undefined, field);
+    assert.equal(entry[field]?.[core.name], undefined, field);
+  }
+  assert.equal(manifest.dependencies, undefined);
 });
 
 test("release retains independently pinned Kilo SDK and plugin build dependencies", () => {

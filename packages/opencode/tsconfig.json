@@ -1,9 +1,4 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "paths": {
-      "@lunchbox-labs/prompt-composer-core/*": ["../core/src/*.ts"]
-    }
-  },
   "include": ["src/**/*.ts"]
 }

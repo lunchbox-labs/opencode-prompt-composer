@@ -8,11 +8,15 @@ import {
   TextRenderable,
 } from "./fixed-menu-runtime.ts";
 
+// Core's menu and viewer import the host renderer. A packed host package
+// bundles both into its dist/tui.js.
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (
       specifier === "@opentui/core" &&
-      /\/(?:fixed-menu|text-viewer)\.(?:ts|js)$/.test(context.parentURL ?? "")
+      /\/(?:fixed-menu|text-viewer)\.(?:ts|js)$|\/dist\/tui\.js$/.test(
+        context.parentURL ?? "",
+      )
     ) {
       return {
         url: new URL("./fixed-menu-runtime.ts", import.meta.url).href,

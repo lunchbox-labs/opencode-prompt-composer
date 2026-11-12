@@ -11,15 +11,8 @@ const prereleaseVersion = new RegExp(
 const repository =
   "git+https://github.com/lunchbox-labs/opencode-prompt-composer.git";
 
-/**
- * The published packages in publication order: core first, because both
- * adapters depend on it at the same version.
- */
+/** The published packages in publication order. */
 export const releasePackages = Object.freeze([
-  Object.freeze({
-    directory: "packages/core",
-    name: "@lunchbox-labs/prompt-composer-core",
-  }),
   Object.freeze({
     directory: "packages/opencode",
     name: "@lunchbox-labs/opencode-prompt-composer",
@@ -29,7 +22,19 @@ export const releasePackages = Object.freeze([
     name: "@lunchbox-labs/kilo-prompt-composer",
   }),
 ]);
-const [corePackage] = releasePackages;
+
+/**
+ * The private workspace package that each host package bundles at build time.
+ * It is never published, so no published manifest may name it. npm links every
+ * workspace into node_modules, so the build resolves it without a dependency.
+ */
+export const corePackage = "@lunchbox-labs/prompt-composer-core";
+const dependencyFields = [
+  "dependencies",
+  "optionalDependencies",
+  "peerDependencies",
+  "devDependencies",
+];
 
 // A pre-release run publishes a pre-release version only, and a normal run a
 // stable version only, so npm's latest tag never moves to a pre-release.
@@ -101,8 +106,8 @@ export function validatePackage(
 }
 
 /**
- * Validates the three manifests, in releasePackages order, as one release:
- * one version, one access, and adapters that depend on exactly that core.
+ * Validates the two host manifests, in releasePackages order, as one release:
+ * one version, one access, and no dependency on the bundled core.
  */
 export function validateRelease(manifests, tag, lock, options = {}) {
   if (
@@ -110,7 +115,7 @@ export function validateRelease(manifests, tag, lock, options = {}) {
     manifests.length !== releasePackages.length
   ) {
     throw new Error(
-      "A release validates the core, OpenCode and Kilo packages together.",
+      "A release validates the OpenCode and Kilo packages together.",
     );
   }
   const results = releasePackages.map((expected, index) =>
@@ -119,21 +124,22 @@ export function validateRelease(manifests, tag, lock, options = {}) {
   const [{ version, access }] = results;
   if (results.some((result) => result.version !== version)) {
     throw new Error(
-      "packages/core, packages/opencode and packages/kilo must hold the same version.",
+      "packages/opencode and packages/kilo must hold the same version.",
     );
   }
   if (results.some((result) => result.access !== access)) {
     throw new Error("Every released package must have the same access.");
   }
   for (const [index, manifest] of manifests.entries()) {
-    const expected = index === 0 ? {} : { [corePackage.name]: version };
-    if (
-      JSON.stringify(manifest.dependencies ?? {}) !== JSON.stringify(expected)
-    ) {
+    const bundled = [
+      ...dependencyFields.map((field) => manifest[field]?.[corePackage]),
+      ...[manifest.bundleDependencies, manifest.bundledDependencies]
+        .flat()
+        .filter((name) => name === corePackage),
+    ];
+    if (bundled.some((value) => value !== undefined)) {
       throw new Error(
-        index === 0
-          ? `${corePackage.name} must have no runtime dependencies.`
-          : `${results[index].name} must depend only on ${corePackage.name} at exactly ${version}.`,
+        `${results[index].name} bundles ${corePackage} at build time, so it must not list it as a dependency.`,
       );
     }
   }

@@ -1,14 +1,7 @@
 # Prompt Composer core
 
-The shared core of [OpenCode Prompt Composer](https://www.npmjs.com/package/@lunchbox-labs/opencode-prompt-composer) and [Kilo Prompt Composer](https://www.npmjs.com/package/@lunchbox-labs/kilo-prompt-composer). It holds prompt discovery, include expansion, the server hooks and the prompt viewer, and a host profile for each supported host.
+The source that the [OpenCode](../opencode/) and [Kilo CLI](../kilo/) packages share: prompt discovery, include expansion, the server hooks, the prompt viewer, and a host profile for each host in `src/host.ts`.
 
-Install the package for your host instead; it depends on this one at the same version:
+This package is private and is never published. Each host package's build bundles it with [tsdown](https://tsdown.dev/), so the published packages don't depend on it. Its `exports` point at the TypeScript sources, for the host packages' build and typecheck within the workspace; its version is not released.
 
-```sh
-npm install @lunchbox-labs/opencode-prompt-composer
-npm install @lunchbox-labs/kilo-prompt-composer
-```
-
-The `./includes` and `./host` declarations have no host types. The `./server` and `./tui` declarations refer to `@opencode-ai/plugin` types and are internal to the adapters, which re-export the result with their host's own plugin types, so the package does not depend on a host package.
-
-Requires Node **22.18+**. The [wiki](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki) documents both hosts, and [Developer](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Developer) describes the workspace.
+[Developer](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Developer) describes the workspace.

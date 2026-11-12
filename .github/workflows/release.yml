@@ -1,9 +1,10 @@
 name: Release
-# Run by hand on main. The run releases the version that packages/core,
-# packages/opencode and packages/kilo share: it refuses a version that already
-# has a tag or any of the three on npm, runs Check on the release commit,
-# publishes the verified tarballs to npm (core first), then creates the
-# v<version> tag and a published GitHub release with the tarballs attached.
+# Run by hand on main. The run releases the version that packages/opencode and
+# packages/kilo share: it refuses a version that already has a tag or either
+# package on npm, runs Check on the release commit, publishes the verified
+# tarballs to npm (OpenCode first), then creates the v<version> tag and a
+# published GitHub release with the tarballs attached. packages/core is
+# private and bundled into both, so it is never packed or published.
 on:
   workflow_dispatch:
     inputs:
@@ -63,10 +64,10 @@ jobs:
           PRERELEASE: ${{ inputs.prerelease }}
           RELEASE_COMMIT: ${{ github.sha }}
         run: |
-          # The three packages release together, so they must share one version.
-          versions="$(jq -r .version packages/core/package.json packages/opencode/package.json packages/kilo/package.json | sort -u)"
+          # The two packages release together, so they must share one version.
+          versions="$(jq -r .version packages/opencode/package.json packages/kilo/package.json | sort -u)"
           if [ "$(wc -l <<<"$versions")" -ne 1 ]; then
-            echo "::error::packages/core, packages/opencode and packages/kilo must hold the same version."
+            echo "::error::packages/opencode and packages/kilo must hold the same version."
             exit 1
           fi
           version="$versions"
@@ -186,7 +187,7 @@ jobs:
       - name: Pack the verified build
         run: |
           mkdir release
-          npm pack --workspaces --ignore-scripts --pack-destination release
+          npm pack --workspace packages/opencode --workspace packages/kilo --ignore-scripts --pack-destination release
           cd release
           sha256sum ./*.tgz > SHA256SUMS
       - name: Upload verified package
@@ -236,7 +237,7 @@ jobs:
         working-directory: release
         env:
           NPM_ACCESS: ${{ needs.verify.outputs.access }}
-          # In publication order: core first, which both adapters depend on.
+          # In publication order: OpenCode, then Kilo.
           NPM_PACKAGES: ${{ needs.verify.outputs.packages }}
           NPM_TAG: ${{ inputs.prerelease && 'next' || 'latest' }}
           NPM_VERSION: ${{ needs.verify.outputs.version }}

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { parse as parseYaml } from "yaml";
 import {
+  corePackage,
   releasePackages,
   validatePackage,
   validateRelease as validateWorkspace,
@@ -16,7 +17,7 @@ const release = {
   },
   publishConfig: { access: "public" },
 };
-const expected = releasePackages[1];
+const expected = releasePackages[0];
 
 const lock = {
   packages: {
@@ -136,15 +137,12 @@ test("release validation rejects private, provisional, mismatched, prerelease, a
   }
 });
 
-// The three manifests and lockfile of one release, as the repository holds them.
+// The two manifests and lockfile of one release, as the repository holds them.
 function workspace(version = "1.2.3") {
-  const manifests = releasePackages.map(({ name }, index) => ({
+  const manifests = releasePackages.map(({ name }) => ({
     ...release,
     name,
     version,
-    ...(index === 0
-      ? {}
-      : { dependencies: { [releasePackages[0].name]: version } }),
   }));
   const packageLock = {
     packages: Object.fromEntries(
@@ -157,15 +155,15 @@ function workspace(version = "1.2.3") {
   return { manifests, packageLock };
 }
 
-test("a release validates core, OpenCode and Kilo together, in publication order", () => {
+test("a release validates OpenCode and Kilo together, in publication order, without the private core", () => {
   assert.deepEqual(
     releasePackages.map(({ name }) => name),
     [
-      "@lunchbox-labs/prompt-composer-core",
       "@lunchbox-labs/opencode-prompt-composer",
       "@lunchbox-labs/kilo-prompt-composer",
     ],
   );
+  assert.equal(corePackage, "@lunchbox-labs/prompt-composer-core");
   const { manifests, packageLock } = workspace();
   assert.deepEqual(validateWorkspace(manifests, "v1.2.3", packageLock), {
     version: "1.2.3",
@@ -182,16 +180,16 @@ test("a release validates core, OpenCode and Kilo together, in publication order
   );
 });
 
-test("a release refuses packages that disagree on version, access or the core dependency", () => {
+test("a release refuses packages that disagree on version or access, or that depend on the bundled core", () => {
   const { manifests, packageLock } = workspace();
   const kiloOnly = (change) =>
     manifests.map((manifest, index) =>
-      index === 2 ? { ...manifest, ...change } : manifest,
+      index === 1 ? { ...manifest, ...change } : manifest,
     );
   const lockAt = (version) => ({
     packages: {
       ...packageLock.packages,
-      "packages/kilo": { name: releasePackages[2].name, version },
+      "packages/kilo": { name: releasePackages[1].name, version },
     },
   });
   // Each manifest is checked against the tag first, so a lone version bump
@@ -214,31 +212,33 @@ test("a release refuses packages that disagree on version, access or the core de
       ),
     /same access/,
   );
-  for (const dependencies of [
-    undefined,
-    {},
-    { [releasePackages[0].name]: "^1.2.3" },
-    { [releasePackages[0].name]: "1.2.2" },
-    { [releasePackages[0].name]: "1.2.3", other: "1.0.0" },
+  // Core is bundled into each package and never published, so a published
+  // manifest that names it in any dependency field could not be installed.
+  for (const change of [
+    { dependencies: { [corePackage]: "1.2.3" } },
+    { dependencies: { [corePackage]: "*", other: "^1.0.0" } },
+    { optionalDependencies: { [corePackage]: "1.2.3" } },
+    { peerDependencies: { [corePackage]: "^1.2.3" } },
+    { devDependencies: { [corePackage]: "*" } },
+    { bundleDependencies: [corePackage] },
+    { bundledDependencies: [corePackage] },
   ]) {
     assert.throws(
-      () =>
-        validateWorkspace(kiloOnly({ dependencies }), "v1.2.3", packageLock),
-      /must depend only on @lunchbox-labs\/prompt-composer-core at exactly 1\.2\.3/,
+      () => validateWorkspace(kiloOnly(change), "v1.2.3", packageLock),
+      /bundles @lunchbox-labs\/prompt-composer-core at build time/,
     );
   }
-  assert.throws(
-    () =>
-      validateWorkspace(
-        manifests.map((manifest, index) =>
-          index === 0
-            ? { ...manifest, dependencies: { other: "1.0.0" } }
-            : manifest,
-        ),
-        "v1.2.3",
-        packageLock,
-      ),
-    /no runtime dependencies/,
+  // Other dependencies are allowed.
+  assert.equal(
+    validateWorkspace(
+      kiloOnly({
+        dependencies: { other: "^1.0.0" },
+        devDependencies: { tool: "^2.0.0" },
+      }),
+      "v1.2.3",
+      packageLock,
+    ).version,
+    "1.2.3",
   );
 });
 
@@ -385,7 +385,7 @@ test("a manual run on main verifies the packages' version, runs Check, publishes
   }
   const pack = verify.steps.findIndex((step) =>
     step.run?.includes(
-      "npm pack --workspaces --ignore-scripts --pack-destination release",
+      "npm pack --workspace packages/opencode --workspace packages/kilo --ignore-scripts --pack-destination release",
     ),
   );
   assert.ok(pack > previous);
@@ -562,7 +562,6 @@ test("only the GitHub release step receives the GitHub token", async () => {
 // The packages a release step sees, in publication order, and the tarballs
 // npm pack makes for them.
 const examplePackages = [
-  "@lunchbox-labs/example-core",
   "@lunchbox-labs/example-one",
   "@lunchbox-labs/example-two",
 ];
@@ -703,15 +702,15 @@ test(
       published(next).every((call) => call.endsWith("--tag next")),
       next.calls.join("\n"),
     );
-    assert.equal(published(next).length, 3);
+    assert.equal(published(next).length, 2);
     const all = await run(each(same));
     assert.equal(all.code, 0, all.stderr);
     assert.deepEqual(published(all), []);
     assert.equal(
       all.stdout.match(/already on npm with this tarball/g)?.length,
-      3,
+      2,
     );
-    // A re-run after core was published publishes only the adapters.
+    // A re-run after the first package was published publishes only the rest.
     const partial = await run({
       ...each(missingVersion),
       [examplePackages[0]]: same,
@@ -729,15 +728,25 @@ test(
     // A different tarball stops the run before any later package.
     const other = await run({
       ...each(missingVersion),
-      [examplePackages[1]]: `echo "sha512-other"; exit 0`,
+      [examplePackages[0]]: `echo "sha512-other"; exit 0`,
     });
     assert.equal(other.code, 1);
-    assert.deepEqual(published(other), [
-      `npm publish ./${tarballs[0]} --ignore-scripts --access public --tag latest`,
-    ]);
+    assert.deepEqual(published(other), []);
     assert.match(
       other.stdout,
       /example-one@1\.2\.3 is already on npm with a different tarball/,
+    );
+    const otherLater = await run({
+      ...each(missingVersion),
+      [examplePackages[1]]: `echo "sha512-other"; exit 0`,
+    });
+    assert.equal(otherLater.code, 1);
+    assert.deepEqual(published(otherLater), [
+      `npm publish ./${tarballs[0]} --ignore-scripts --access public --tag latest`,
+    ]);
+    assert.match(
+      otherLater.stdout,
+      /example-two@1\.2\.3 is already on npm with a different tarball/,
     );
     const offline = await run(
       each(`echo "npm error code ECONNRESET" >&2; exit 1`),
@@ -746,7 +755,7 @@ test(
     assert.deepEqual(published(offline), []);
     assert.match(offline.stderr, /ECONNRESET/);
     const incomplete = await run(each(missingVersion), {
-      files: tarballs.slice(0, 2),
+      files: tarballs.slice(0, 1),
     });
     assert.equal(incomplete.code, 1);
     assert.match(
@@ -885,7 +894,7 @@ test(
       ],
     });
     assert.equal(bare.code, 0, bare.stderr);
-    assert.equal(bare.stdout.match(/::warning::.*without /g)?.length, 3);
+    assert.equal(bare.stdout.match(/::warning::.*without /g)?.length, 2);
     assert.equal(bare.output, `attached=false\nurl=${releasePage}\n`);
 
     const partial = await runRelease({
@@ -895,7 +904,7 @@ test(
           tag_name: "v1.2.3",
           draft: false,
           html_url: releasePage,
-          assets: tarballs.slice(0, 2).map((name) => ({ name })),
+          assets: tarballs.slice(0, 1).map((name) => ({ name })),
         },
       ],
     });
@@ -1014,7 +1023,7 @@ test(
     );
     // Every missing name is reported, not only the first.
     const missing = await run(
-      `if [ "$2" != "@lunchbox-labs/example-core" ]; then echo "npm error code E404" >&2; exit 1; fi; echo "$2"`,
+      `if [ "$2" != "@lunchbox-labs/example-one" ]; then echo "npm error code E404" >&2; exit 1; fi; echo "$2"`,
     );
     assert.equal(missing.code, 1);
     assert.equal(missing.calls.length, examplePackages.length);
@@ -1024,7 +1033,7 @@ test(
         new RegExp(`::error::${name.replaceAll("/", "\\/")} is not on npm`),
       );
     }
-    assert.doesNotMatch(missing.stdout, /example-core is not on npm/);
+    assert.doesNotMatch(missing.stdout, /example-one is not on npm/);
     const offline = await run(`echo "npm error code ECONNRESET" >&2; exit 1`);
     assert.equal(offline.code, 1);
     assert.match(offline.stderr, /ECONNRESET/);
@@ -1072,9 +1081,9 @@ test(
     assert.equal(published.code, 1);
     assert.match(
       published.stdout,
-      /::error::@lunchbox-labs\/example-core@1\.2\.3 is already on npm/,
+      /::error::@lunchbox-labs\/example-one@1\.2\.3 is already on npm/,
     );
-    // Any one of the three already on npm refuses the version.
+    // Either package already on npm refuses the version.
     const adapter = await run(
       missingTag,
       `if [ "$2" = "@lunchbox-labs/example-two@1.2.3" ]; then echo "1.2.3"; exit 0; fi; ${missingVersion}`,
@@ -1125,11 +1134,16 @@ test(
     ) => {
       const root = await mkdtemp(join(tmpdir(), "release-version-"));
       try {
+        // Core is private and not released, so its version is not read.
         for (const directory of ["core", "opencode", "kilo"]) {
           await mkdir(join(root, "packages", directory), { recursive: true });
           await writeFile(
             join(root, "packages", directory, "package.json"),
-            JSON.stringify({ version: versions[directory] ?? version }),
+            JSON.stringify({
+              version:
+                versions[directory] ??
+                (directory === "core" ? "0.0.1" : version),
+            }),
           );
         }
         const output = join(root, "output");
@@ -1195,7 +1209,7 @@ test(
       assert.equal(refused.output, "", version);
       assert.equal(refused.summary, "", version);
     }
-    for (const versions of [{ kilo: "1.2.4" }, { core: "1.2.2" }]) {
+    for (const versions of [{ kilo: "1.2.4" }, { opencode: "1.2.2" }]) {
       const mismatched = await run("1.2.3", { versions });
       assert.equal(mismatched.code, 1);
       assert.match(mismatched.stdout, /must hold the same version/);

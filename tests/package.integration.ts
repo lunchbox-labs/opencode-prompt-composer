@@ -1,12 +1,26 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import { corePackage, hosts } from "./hosts.ts";
+
+const dependencyFields = [
+  "dependencies",
+  "optionalDependencies",
+  "peerDependencies",
+  "devDependencies",
+];
 
 const execute = promisify(execFile);
 const npm = process.env.npm_execpath;
@@ -22,7 +36,17 @@ const manifestOf = async (workspace: string) =>
     devDependencies: Record<string, string>;
   };
 const { devDependencies } = await manifestOf(".");
-const core = await manifestOf(corePackage.workspace);
+
+/** Every file under a directory, as paths relative to it. */
+async function filesUnder(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, {
+    recursive: true,
+    withFileTypes: true,
+  });
+  return entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name));
+}
 
 for (const host of Object.values(hosts)) {
   const { packageName, projectDirectory } = host;
@@ -35,14 +59,13 @@ for (const host of Object.values(hosts)) {
     async (t) => {
       const root = await mkdtemp(join(tmpdir(), "prompt-package-"));
       t.after(() => rm(root, { recursive: true, force: true }));
-      // npm packs workspaces in their declared order, core first.
+      // Core is private and bundled into the package, so only the package
+      // itself is packed and installed.
       const packed = await execute(
         process.execPath,
         [
           npm,
           "pack",
-          "--workspace",
-          corePackage.workspace,
           "--workspace",
           host.workspace,
           "--ignore-scripts",
@@ -52,31 +75,28 @@ for (const host of Object.values(hosts)) {
         ],
         { cwd: resolve("."), timeout: 60_000, signal: t.signal },
       );
-      const [corePack, { filename, files }] = JSON.parse(packed.stdout) as {
+      const packs = JSON.parse(packed.stdout) as {
         name: string;
         filename: string;
         files: { path: string }[];
       }[];
-      assert.equal(corePack.name, corePackage.packageName);
-      for (const path of [
-        "dist/host.d.ts",
-        "dist/server.js",
-        "dist/tui.js",
-        "dist/includes.d.ts",
-        "README.md",
-        "LICENSE",
-      ]) {
-        assert.ok(
-          corePack.files.some((file) => file.path === path),
-          `Missing core ${path}`,
-        );
+      assert.deepEqual(
+        packs.map(({ name }) => name),
+        [packageName],
+      );
+      const [{ filename, files }] = packs;
+      for (const entry of ["server", "includes", "tui"]) {
+        for (const extension of ["js", "d.ts"]) {
+          const path = `dist/${entry}.${extension}`;
+          assert.ok(
+            files.some((file) => file.path === path),
+            `Missing ${path}`,
+          );
+        }
       }
       assert.ok(
-        !corePack.files.some(
-          (file) =>
-            file.path.startsWith("tests/") ||
-            file.path.startsWith("src/") ||
-            file.path.startsWith("docs/"),
+        !files.some(
+          (file) => file.path.startsWith("src/") || file.path.endsWith(".map"),
         ),
       );
       assert.ok(files.some((file) => file.path === "dist/server.d.ts"));
@@ -92,9 +112,7 @@ for (const host of Object.values(hosts)) {
         "reload",
       ]) {
         assert.ok(
-          ![...files, ...corePack.files].some((file) =>
-            file.path.startsWith(`dist/${removed}.`),
-          ),
+          !files.some((file) => file.path.startsWith(`dist/${removed}.`)),
           `Removed module is still packed: ${removed}`,
         );
       }
@@ -133,7 +151,6 @@ for (const host of Object.values(hosts)) {
           "--ignore-scripts",
           "--no-audit",
           "--no-fund",
-          join(root, corePack.filename),
           join(root, filename),
           `${host.pluginPackage}@${pluginVersion}`,
           `@types/node@${devDependencies["@types/node"]}`,
@@ -153,8 +170,14 @@ for (const host of Object.values(hosts)) {
         `import assert from 'node:assert/strict';
 import { dialogView, fixedMenuApi } from ${JSON.stringify(pathToFileURL(resolve("packages/core/tests/fixed-menu-harness.ts")).href)};
 import plugin from '${packageName}';
+import server from '${packageName}/server';
+import * as includes from '${packageName}/includes';
 import tui from '${packageName}/tui';
+assert.equal(server, plugin);
+assert.equal(plugin.id, 'prompt-composer');
 assert.equal(tui.id, 'prompt-composer');
+assert.deepEqual(Object.keys(includes).sort(), ['MAX_INCLUDES', 'MAX_INCLUDE_DEPTH', 'MAX_PROMPT_BYTES', 'MAX_SNIPPET_BYTES', 'expandIncludes']);
+assert.equal(await includes.expandIncludes('Use {{include:rules.md}}.', new Map([['rules.md', { path: process.argv[2] + '/${projectDirectory}/prompts/rules.md', root: process.argv[2] + '/${projectDirectory}/prompts', relativePath: 'rules.md' }]])), 'Use Packed rules.');
 for (const name of ['editor', 'settings', 'schema.json']) {
   await assert.rejects(import('${packageName}/' + name), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 }
@@ -205,12 +228,26 @@ assert.deepEqual(config, before);
       await writeFile(
         join(root, "consumer.mts"),
         `import plugin from '${packageName}';
-import { expandIncludes } from '${packageName}/includes';
+import server from '${packageName}/server';
+import tui from '${packageName}/tui';
+import {
+  MAX_INCLUDES,
+  type PromptDependency,
+  type PromptRead,
+  expandIncludes,
+} from '${packageName}/includes';
 const id: string = plugin.id;
-await expandIncludes('body', new Map());
+const same: typeof plugin = server;
+const tuiId: string = tui.id;
+const limit: number = MAX_INCLUDES;
+const onRead: PromptRead = (dependency: PromptDependency) => {
+  const text: string = dependency.text;
+  console.log(text);
+};
+await expandIncludes('body', new Map(), onRead);
 // @ts-expect-error -- A discovered-file registry cannot be replaced by a string.
 await expandIncludes('body', 'bad');
-console.log(id);
+console.log(id, same.id, tuiId, limit);
 `,
       );
       await execute(
@@ -234,29 +271,54 @@ console.log(id);
           "utf8",
         ),
       ) as Record<string, Record<string, string> | undefined>;
-      // The adapter's only runtime dependency is core at its own version.
-      assert.deepEqual(manifest.dependencies, {
-        [corePackage.packageName]: core.version,
-      });
+      // Core is bundled, so the package has no runtime dependency, names
+      // core in no dependency field, and installs without it.
+      assert.deepEqual(manifest.dependencies ?? {}, {});
+      for (const field of dependencyFields) {
+        assert.equal(
+          manifest[field]?.[corePackage.packageName],
+          undefined,
+          field,
+        );
+      }
       assert.equal(Object.hasOwn(manifest.engines ?? {}, host.id), false);
       assert.equal(manifest.engines?.node, ">=22.18.0");
       assert.ok(!files.some((file) => file.path.startsWith("tests/")));
-      // Core has no runtime dependency on any host package.
-      const installedCore = JSON.parse(
-        await readFile(
+      await assert.rejects(
+        readFile(
           join(root, "node_modules", corePackage.packageName, "package.json"),
-          "utf8",
         ),
-      ) as Record<string, Record<string, string> | undefined>;
-      assert.deepEqual(installedCore.dependencies ?? {}, {});
-      assert.deepEqual(installedCore.peerDependencies ?? {}, {});
-      assert.equal(installedCore.engines?.node, ">=22.18.0");
-      for (const field of [
-        "dependencies",
-        "optionalDependencies",
-        "peerDependencies",
-        "devDependencies",
-      ]) {
+        { code: "ENOENT" },
+      );
+      // No installed file refers to core, and the build inlined only core's
+      // and the package's own sources: no file comes from node_modules, and
+      // each core module is inlined once, so modules the entries share, such
+      // as the startup snippet cache, have one instance.
+      const installed = join(root, "node_modules", packageName);
+      const inlined = new Map<string, string[]>();
+      for (const file of await filesUnder(installed)) {
+        const text = await readFile(file, "utf8");
+        assert.ok(!text.includes(corePackage.packageName), file);
+        if (!file.endsWith(".js")) {
+          continue;
+        }
+        assert.ok(!text.includes("node_modules"), file);
+        // Rolldown starts each inlined module with a comment naming it.
+        for (const [, path] of text.matchAll(/^\/\/ (\S+\.ts)\r?$/gm)) {
+          const source = path.replaceAll("\\", "/");
+          assert.match(source, /^(?:\.\.\/core\/)?src\/[\w-]+\.ts$/, file);
+          inlined.set(source, [...(inlined.get(source) ?? []), file]);
+        }
+      }
+      assert.ok(inlined.has("../core/src/startup-snippets.ts"));
+      for (const [source, copies] of inlined) {
+        assert.equal(
+          copies.length,
+          1,
+          `${source} is inlined in ${copies.join(", ")}`,
+        );
+      }
+      for (const field of dependencyFields) {
         assert.equal(
           manifest[field]?.["@lunchbox-labs/opencode-config-composer"],
           undefined,

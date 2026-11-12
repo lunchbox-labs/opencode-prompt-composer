@@ -13,15 +13,17 @@ Prompt Composer's include safety engine and dialog navigation originated in the 
 
 ## Workspace layout
 
-The repository is an npm workspace with one lockfile. Its three packages are released together at one version:
+The repository is an npm workspace with one lockfile. Its two host packages are released together at one version, and both are built from a private core:
 
 | Directory | Package | Contents |
 | --- | --- | --- |
-| `packages/core` | `@lunchbox-labs/prompt-composer-core` | Discovery, include expansion, the server hooks, the prompt viewer, the host profiles in `src/host.ts`, and the unit tests |
+| `packages/core` | `@lunchbox-labs/prompt-composer-core` (private, not published) | Discovery, include expansion, the server hooks, the prompt viewer, the host profiles in `src/host.ts`, and the unit tests |
 | `packages/opencode` | `@lunchbox-labs/opencode-prompt-composer` | The OpenCode adapter and its examples |
 | `packages/kilo` | `@lunchbox-labs/kilo-prompt-composer` | The Kilo CLI adapter and its examples |
 
-A host profile holds what differs between hosts as data: the product name in messages, the global, project and home config directories, the environment variables, whether the home directory is trimmed and line breaks are removed from `XDG_CONFIG_HOME` (Kilo only), and the metadata of built-in skills. The core takes a profile in `createServer` and `createTui`, and each adapter passes its own and re-exports the result with the host's plugin types. The core has no runtime dependency on a host package, and each adapter depends on the core at exactly the same version.
+A host profile holds what differs between hosts as data: the product name in messages, the global, project and home config directories, the environment variables, whether the home directory is trimmed and line breaks are removed from `XDG_CONFIG_HOME` (Kilo only), and the metadata of built-in skills. The core takes a profile in `createServer` and `createTui`, and each adapter passes its own and re-exports the result with the host's plugin types. The core has no runtime dependency on a host package.
+
+Each adapter's `npm run build` bundles the core into it with [tsdown](https://tsdown.dev/), using the shared [`tsdown.config.mjs`](https://github.com/lunchbox-labs/opencode-prompt-composer/blob/main/tsdown.config.mjs). The `server`, `includes` and `tui` entries build to `dist/<entry>.js` and `dist/<entry>.d.ts` in one build, so a module that more than one entry uses, such as the startup snippet capture, is emitted once in a shared chunk rather than copied into each entry. Every other import stays external: Node built-ins, the host's `@opentui/core` that the viewer loads on demand, and the host plugin types in the declarations. The build fails if it would bundle anything from `node_modules` or emit any other import. npm links the core into the root `node_modules` as a workspace, so the adapters list no dependency on it, and the published manifests name no package that isn't on npm.
 
 The OpenCode adapter builds against `@opencode-ai/plugin` and `@opencode-ai/sdk` 1.19.5 with `@opentui/*` 0.4.5, and the Kilo adapter against `@kilocode/plugin` and `@kilocode/sdk` 7.8.27 with `@opentui/*` 0.5.11. The [baseline tests](https://github.com/lunchbox-labs/opencode-prompt-composer/tree/main/tests) check these pins in the manifests and lockfile, and the Kilo package's `typecheck` script also typechecks the core sources against the Kilo pins: `packages/kilo/tsconfig.core.json` maps the core's `@opencode-ai/plugin` imports to `@kilocode/plugin` and `@opentui/*` to the Kilo package's nested 0.5.11 copies, so `npm run check:static` fails when the core stops matching either host's plugin API. Linting, formatting, TypeScript settings and the integration tests are shared at the root, and `tests/hosts.ts` describes each host for them.
 
@@ -32,10 +34,10 @@ Use the committed npm lockfile. CI uses Node 24; the packages require Node 22.18
 ```sh
 npm ci
 npm run build
-npm pack --workspaces
+npm pack --workspace packages/opencode --workspace packages/kilo
 ```
 
-`npm run build` builds the core first, then the adapters. Install the core tarball and the tarball for your host into a separate directory. Register that installed adapter's absolute directory in `opencode.jsonc` or `kilo.jsonc` and, when testing the viewer, `tui.jsonc`. The host selects the corresponding server or TUI export. This exercises a local candidate without publishing it.
+`npm run build` builds both adapters. Install the tarball for your host into a separate directory; it has no dependency to install alongside it. Register that installed adapter's absolute directory in `opencode.jsonc` or `kilo.jsonc` and, when testing the viewer, `tui.jsonc`. The host selects the corresponding server or TUI export. This exercises a local candidate without publishing it.
 
 ## Runtime boundaries
 
@@ -52,7 +54,7 @@ The skill parser isolates the body from native framing and leaves names, directo
 | Command | Coverage |
 | --- | --- |
 | `npm run check` | Typechecking, lint, formatting and the unit tests of every package |
-| `npm run test:package` | For each host: built tarball installation of the core and adapter, public exports, runtime use and declarations |
+| `npm run test:package` | For each host: installation of the packed package outside the workspace, every export's runtime use and declarations, and that the package neither depends on nor installs the core and inlines no third-party code |
 | `npm run test:native` | Real host server, npm plugin loading, skill execution, process restart and terminal viewer, for the host in `NATIVE_HOST` |
 
 `npm run test:native` runs OpenCode by default; set `NATIVE_HOST=kilo` for Kilo CLI. The native suite uses isolated configuration and a local model fixture; no provider account is needed. On Kilo it also disables telemetry and limits both the primary and the small model to the fixture provider. It downloads the host and verifies the ripgrep prerequisite. Some viewer checks replace rendering, while the PTY/ConPTY path exercises real terminal interaction and asserts that browsing sends no model request. Preserve both layers.

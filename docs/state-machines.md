@@ -1,8 +1,8 @@
 # State machines
 
-This document describes the state Prompt Composer keeps across hooks, events and reloads. Update it in the same PR as any change to these states, their triggers or their exits, following the [state machine conventions](https://github.com/lunchbox-labs/.github/blob/main/agent-guidance/state-machines.md), and cover each transition you add or change in `packages/core/tests/`. Paths below are relative to `packages/core`, which both host packages share. Known bugs belong in issues, not here.
+This document describes the state Prompt Composer keeps across hooks, events and reloads. Update it in the same PR as any change to these states, their triggers or their exits, following the [state machine conventions](https://github.com/lunchbox-labs/.github/blob/main/agent-guidance/state-machines.md), and cover each transition you add or change in `packages/core/tests/`. Paths below are relative to `packages/core`, which the build bundles into both host packages. Known bugs belong in issues, not here.
 
-OpenCode and Kilo rerun the server plugin's factory on every instance load but keep the imported module, so module-level state lasts for the process and closure state is rebuilt on each reload. Every state below is the same for both hosts except where a host profile (`src/host.ts`) is named.
+OpenCode and Kilo rerun the server plugin's factory on every instance load but keep the imported module, so module-level state lasts for the process and closure state is rebuilt on each reload. The bundle emits each core module once, in a chunk shared by the entries that use it, so a package has one copy of each module-level state. Every state below is the same for both hosts except where a host profile (`src/host.ts`) is named.
 
 ## Snippet capture cache
 

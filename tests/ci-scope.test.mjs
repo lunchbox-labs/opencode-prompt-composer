@@ -42,7 +42,7 @@ test("every other change keeps the native matrix", () => {
     "package.json",
     "packages/core/package.json",
     "packages/kilo/package.json",
-    "packages/opencode/tsconfig.build.json",
+    "tsdown.config.mjs",
     "package-lock.json",
     ".github/workflows/check.yml",
     "packages/opencode/docs/examples/review/.opencode/agents/review.md",

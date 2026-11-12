@@ -26,6 +26,20 @@ test("published OpenCode package has no OpenCode engine gate and retains the Nod
   assert.equal(entry.engines.node, manifest.engines.node);
 });
 
+test("published OpenCode package bundles the private core instead of depending on it", () => {
+  assert.equal(core.private, true);
+  for (const field of [
+    "dependencies",
+    "optionalDependencies",
+    "peerDependencies",
+    "devDependencies",
+  ]) {
+    assert.equal(manifest[field]?.[core.name], undefined, field);
+    assert.equal(entry[field]?.[core.name], undefined, field);
+  }
+  assert.equal(manifest.dependencies, undefined);
+});
+
 test("release retains independently pinned SDK and plugin build dependencies", () => {
   assert.equal(manifest.devDependencies["@opencode-ai/plugin"], "1.19.5");
   assert.equal(manifest.devDependencies["@opencode-ai/sdk"], "1.19.5");
