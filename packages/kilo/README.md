@@ -30,14 +30,14 @@ Review the supplied changes.
 Distinguish observed behavior from assumptions.
 ```
 
-Use `{{include?:personal/review.md}}` for an include that may be absent, and run `/view-prompts` to read the loaded agent and command text. Restart the Kilo server after editing snippets. A problem with an include shows a warning toast and never stops a prompt from loading; [Usage](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Usage#snippet-lifetime) describes what is kept.
+Use `{{include?:personal/review.md}}` for an include that may be absent, and run `/view-prompts` to read the loaded agent and command text. Restart the Kilo server after editing snippets. A problem with an include shows a warning toast and never stops a prompt from loading; [Usage](https://github.com/lunchbox-labs/prompt-composer-plugin/wiki/Usage#snippet-lifetime) describes what is kept.
 
 ## Documentation
 
-The [wiki](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki) has the full guides for OpenCode and Kilo CLI:
+The [wiki](https://github.com/lunchbox-labs/prompt-composer-plugin/wiki) has the full guides for OpenCode and Kilo CLI:
 
-- [Usage](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Usage): includes, optional includes, the prompt viewer and native file references.
-- [Discovery](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Discovery): prompt directories, precedence and limits for each host.
-- [Developer](https://github.com/lunchbox-labs/opencode-prompt-composer/wiki/Developer): development, compatibility testing and publishing.
+- [Usage](https://github.com/lunchbox-labs/prompt-composer-plugin/wiki/Usage): includes, optional includes, the prompt viewer and native file references.
+- [Discovery](https://github.com/lunchbox-labs/prompt-composer-plugin/wiki/Discovery): prompt directories, precedence and limits for each host.
+- [Developer](https://github.com/lunchbox-labs/prompt-composer-plugin/wiki/Developer): development, compatibility testing and publishing.
 
 [Review guidance](docs/examples/review/) and [On-demand verification](docs/examples/skill-guidance/) are runnable example projects, each with a walkthrough. Published versions are listed on [npm](https://www.npmjs.com/package/@lunchbox-labs/kilo-prompt-composer?activeTab=versions).

@@ -1,12 +1,12 @@
 # Publishing
 
-The [Release workflow](https://github.com/lunchbox-labs/opencode-prompt-composer/blob/main/.github/workflows/release.yml) runs only when started by hand on `main`, and publishes only when its **publish** input is checked. It releases the workspace's one version in one run: it publishes `@lunchbox-labs/opencode-prompt-composer` and `@lunchbox-labs/kilo-prompt-composer` to npm in that order, creates the `v<version>` tag on the release commit once, and publishes a GitHub release for that tag with the two package tarballs attached and notes generated from the merged pull requests. Branch pushes, pull requests and tag pushes do not publish packages. The shared core in `packages/core` is private: it is bundled into both packages at build time and is never packed or published.
+The [Release workflow](https://github.com/lunchbox-labs/prompt-composer-plugin/blob/main/.github/workflows/release.yml) runs only when started by hand on `main`, and publishes only when its **publish** input is checked. It releases the workspace's one version in one run: it publishes `@lunchbox-labs/opencode-prompt-composer` and `@lunchbox-labs/kilo-prompt-composer` to npm in that order, creates the `v<version>` tag on the release commit once, and publishes a GitHub release for that tag with the two package tarballs attached and notes generated from the merged pull requests. Branch pushes, pull requests and tag pushes do not publish packages. The shared core in `packages/core` is private: it is bundled into both packages at build time and is never packed or published.
 
 ## Publisher setup
 
 The workflow expects these settings, configured through the respective services. This page describes the required setup, not confirmation of its current state.
 
-- **npm trusted publishers:** one on each of the two packages, each with organization `lunchbox-labs`, repository `opencode-prompt-composer`, workflow filename `release.yml` and environment `release`. Allow direct `npm publish`, which is the command this workflow uses. npm offers the setting only on a package that exists, so [bootstrap](#bootstrap-a-new-package-name) a package name that has never been published first. See [npm's trusted publishing guide](https://docs.npmjs.com/trusted-publishers/).
+- **npm trusted publishers:** one on each of the two packages, each with organization `lunchbox-labs`, repository `prompt-composer-plugin`, workflow filename `release.yml` and environment `release`. Allow direct `npm publish`, which is the command this workflow uses. npm offers the setting only on a package that exists, so [bootstrap](#bootstrap-a-new-package-name) a package name that has never been published first. See [npm's trusted publishing guide](https://docs.npmjs.com/trusted-publishers/).
 - **`release` environment:** allows deployments from `main` only. It holds no secrets or variables.
 - **Actions policy:** only maintainers may start Release, and Wiki may run only on pushes to `main`. Both can write to the repository.
 - **Tag rulesets:** a ruleset blocks updating and deleting `v*` tags. No ruleset blocks creating them, because Release creates the tag itself.
@@ -26,7 +26,7 @@ cat > package.json <<'JSON'
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lunchbox-labs/opencode-prompt-composer.git"
+    "url": "git+https://github.com/lunchbox-labs/prompt-composer-plugin.git"
   }
 }
 JSON
@@ -54,9 +54,9 @@ The run's summary names the version as soon as the **Release version** job finis
 
 ## What the run does
 
-**Release version** stops a run started on any other branch, reads the version from the two package manifests and stops when they differ. **Verify** then requires the checked-out commit to match the run's commit, and stops before building when either package name is not on npm yet, when `v<version>` is already tagged, or when either package already has the version on npm. [validate-release.mjs](https://github.com/lunchbox-labs/opencode-prompt-composer/blob/main/scripts/validate-release.mjs) also validates each package's identity, repository, registry, access and lockfile metadata, and that neither package names the private core in any dependency field. Verify runs `npm ci` and `npm run test:package`, packs the two packages and uploads the tarballs with SHA-256 checksums.
+**Release version** stops a run started on any other branch, reads the version from the two package manifests and stops when they differ. **Verify** then requires the checked-out commit to match the run's commit, and stops before building when either package name is not on npm yet, when `v<version>` is already tagged, or when either package already has the version on npm. [validate-release.mjs](https://github.com/lunchbox-labs/prompt-composer-plugin/blob/main/scripts/validate-release.mjs) also validates each package's identity, repository, registry, access and lockfile metadata, and that neither package names the private core in any dependency field. Verify runs `npm ci` and `npm run test:package`, packs the two packages and uploads the tarballs with SHA-256 checksums.
 
-**Check** runs the [Check workflow](https://github.com/lunchbox-labs/opencode-prompt-composer/blob/main/.github/workflows/check.yml) on the release commit as part of the run, with every job it runs on a push to `main`. Its runs inside Release are grouped apart from Check's own runs, so a push to `main` during a release doesn't cancel them.
+**Check** runs the [Check workflow](https://github.com/lunchbox-labs/prompt-composer-plugin/blob/main/.github/workflows/check.yml) on the release commit as part of the run, with every job it runs on a push to `main`. Its runs inside Release are grouped apart from Check's own runs, so a push to `main` during a release doesn't cancel them.
 
 **Publish npm** downloads the verified tarballs, checks their checksums and publishes them with scripts disabled, OpenCode first, then Kilo. It does not rebuild the packages. **GitHub release** then creates the `v<version>` tag on the release commit and publishes a GitHub release for it with the same tarballs attached.
 

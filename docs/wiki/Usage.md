@@ -60,6 +60,6 @@ Includes also work inside Markdown agent, command and skill bodies. They expand 
 
 Each package ships the same two examples, laid out for its host:
 
-- Review guidance shares a findings format between an agent and command: [OpenCode](https://github.com/lunchbox-labs/opencode-prompt-composer/tree/main/packages/opencode/docs/examples/review), [Kilo](https://github.com/lunchbox-labs/opencode-prompt-composer/tree/main/packages/kilo/docs/examples/review).
-- On-demand verification loads a checklist through a skill: [OpenCode](https://github.com/lunchbox-labs/opencode-prompt-composer/tree/main/packages/opencode/docs/examples/skill-guidance), [Kilo](https://github.com/lunchbox-labs/opencode-prompt-composer/tree/main/packages/kilo/docs/examples/skill-guidance).
+- Review guidance shares a findings format between an agent and command: [OpenCode](https://github.com/lunchbox-labs/prompt-composer-plugin/tree/main/packages/opencode/docs/examples/review), [Kilo](https://github.com/lunchbox-labs/prompt-composer-plugin/tree/main/packages/kilo/docs/examples/review).
+- On-demand verification loads a checklist through a skill: [OpenCode](https://github.com/lunchbox-labs/prompt-composer-plugin/tree/main/packages/opencode/docs/examples/skill-guidance), [Kilo](https://github.com/lunchbox-labs/prompt-composer-plugin/tree/main/packages/kilo/docs/examples/skill-guidance).
 - [Migration](Migration) covers older Prompt Composer settings and optional Config Composer ordering.
