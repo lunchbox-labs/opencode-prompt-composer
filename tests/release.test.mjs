@@ -13,7 +13,7 @@ const release = {
   name: "@lunchbox-labs/opencode-prompt-composer",
   version: "1.2.3",
   repository: {
-    url: "git+https://github.com/lunchbox-labs/opencode-prompt-composer.git",
+    url: "git+https://github.com/lunchbox-labs/prompt-composer-plugin.git",
   },
   publishConfig: { access: "public" },
 };
@@ -272,7 +272,7 @@ async function workflowFile(name) {
 }
 
 const repositoryGuard =
-  "github.repository == 'lunchbox-labs/opencode-prompt-composer' && github.event_name == 'workflow_dispatch'";
+  "github.repository == 'lunchbox-labs/prompt-composer-plugin' && github.event_name == 'workflow_dispatch'";
 
 test("a manual run on main verifies the packages' version, runs Check, publishes to npm and releases", async () => {
   const { workflow } = await workflowFile("release.yml");

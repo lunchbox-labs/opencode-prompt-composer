@@ -9,7 +9,7 @@ const prereleaseVersion = new RegExp(
 );
 
 const repository =
-  "git+https://github.com/lunchbox-labs/opencode-prompt-composer.git";
+  "git+https://github.com/lunchbox-labs/prompt-composer-plugin.git";
 
 /** The published packages in publication order. */
 export const releasePackages = Object.freeze([
