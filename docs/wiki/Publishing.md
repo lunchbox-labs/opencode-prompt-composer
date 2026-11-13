@@ -1,6 +1,6 @@
 # Publishing
 
-The [Release workflow](https://github.com/lunchbox-labs/opencode-prompt-composer/blob/main/.github/workflows/release.yml) runs only when started by hand on `main`. It releases the workspace's one version in one run: it publishes `@lunchbox-labs/opencode-prompt-composer` and `@lunchbox-labs/kilo-prompt-composer` to npm in that order, creates the `v<version>` tag on the release commit once, and publishes a GitHub release for that tag with the two package tarballs attached and notes generated from the merged pull requests. Branch pushes, pull requests and tag pushes do not publish packages. The shared core in `packages/core` is private: it is bundled into both packages at build time and is never packed or published.
+The [Release workflow](https://github.com/lunchbox-labs/opencode-prompt-composer/blob/main/.github/workflows/release.yml) runs only when started by hand on `main`, and publishes only when its **publish** input is checked. It releases the workspace's one version in one run: it publishes `@lunchbox-labs/opencode-prompt-composer` and `@lunchbox-labs/kilo-prompt-composer` to npm in that order, creates the `v<version>` tag on the release commit once, and publishes a GitHub release for that tag with the two package tarballs attached and notes generated from the merged pull requests. Branch pushes, pull requests and tag pushes do not publish packages. The shared core in `packages/core` is private: it is bundled into both packages at build time and is never packed or published.
 
 ## Publisher setup
 
@@ -37,17 +37,17 @@ npm dist-tag ls @lunchbox-labs/kilo-prompt-composer
 
 For any later new package, use its own name. The bootstrap version is never used for a release. `npm dist-tag ls` shows where `bootstrap` and `latest` point; `latest` moves to the first stable version that Release publishes. Then add the package's trusted publisher as above. If a placeholder of `@lunchbox-labs/prompt-composer-core` was ever published, leave it deprecated; no release publishes that name.
 
-Start Release with **dry_run** to confirm that Verify passes. A dry run stops before npm, so it does not exercise the trusted publisher or OIDC. If a trusted publisher is missing or wrong, the first real run publishes the packages before that one and fails at it. Fix the publisher and re-run only the failed jobs within the artifact's three days: Publish npm skips the packages npm already holds with the same tarballs and publishes the rest.
+Start Release with **publish** unchecked to confirm that Verify passes. That run stops before npm, so it does not exercise the trusted publisher or OIDC. If a trusted publisher is missing or wrong, the first real run publishes the packages before that one and fails at it. Fix the publisher and re-run only the failed jobs within the artifact's three days: Publish npm skips the packages npm already holds with the same tarballs and publishes the rest.
 
 ## Prepare and run a release
 
 1. Set the same version in `packages/opencode/package.json` and `packages/kilo/package.json`, and run `npm install` so their workspace entries in `package-lock.json` match. The private core's version is not released and need not change. Use a non-placeholder semantic version that has no tag and isn't on npm yet for either package: a stable version such as `1.2.3` for a release, or a pre-release version such as `1.2.3-beta.1` for a pre-release.
 2. Complete the required checks and review, and integrate the release commit into `main` through the repository's normal process.
-3. Open **Actions**, choose **Release**, and select **Run workflow** with `main` as the branch. The run releases the commit at the head of `main` when it starts, so start it once the release commit is the latest commit there. Run it once per version.
+3. Open **Actions**, choose **Release**, and select **Run workflow** with `main` as the branch and **publish** checked. The run releases the commit at the head of `main` when it starts, so start it once the release commit is the latest commit there. Run it once per version.
 
 The run has two inputs:
 
-- **dry_run:** builds and checks the release, then stops before npm, the tag and the GitHub release.
+- **publish:** off by default. Unchecked, the run builds, checks and packs the release and keeps the tarballs only as the run's `release` artifact, then stops before npm, the tag and the GitHub release. It still stops at Verify when the version is already tagged or on npm. Check it to publish the official release.
 - **prerelease:** publishes under npm's `next` tag instead of `latest`, and marks the GitHub release as a pre-release. A pre-release run needs a pre-release version, and a normal run a stable one, so `latest` never moves to a pre-release.
 
 The run's summary names the version as soon as the **Release version** job finishes, and links the release once the **GitHub release** job has published it. Don't push the tag or create the release by hand: Release refuses a version that is already tagged, and tags can't be moved or deleted.
